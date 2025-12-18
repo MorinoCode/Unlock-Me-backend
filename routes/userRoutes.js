@@ -1,11 +1,12 @@
 import express from "express";
-import { loginUser } from "../controllers/login/loginUser.js";
+import { signinUser } from "../controllers/signin/signinUser.js";
 import { signupUser } from "../controllers/signup/signupUser.js";
+import { authLimiter } from "../middleware/authLimiter.js";
 
 
 const router = express.Router();
 
-router.post("/login", loginUser);
-router.post("/signup", signupUser);
+router.post("/signin",authLimiter, signinUser);
+router.post("/signup",authLimiter, signupUser);
 
 export default router;

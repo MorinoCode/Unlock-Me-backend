@@ -1,8 +1,12 @@
 import bcrypt from "bcryptjs";
 import User from "../../models/User.js";
+import jwt from "jsonwebtoken";
 
 export const signupUser = async (req, res) => {
-  const { name, email, password, gender, lookingFor } = req.body;
+  let { name, email, password, gender, lookingFor } = req.body;
+
+  email = email.toLowerCase();
+  name = name.toLowerCase();
 
   try {
     const existingUser = await User.findOne({ email });
@@ -22,8 +26,28 @@ export const signupUser = async (req, res) => {
     });
 
     await newUser.save();
-    res.status(201).json({ message: "User registered successfully" });
+
+    const token = jwt.sign(
+      { userId: newUser._id, role: newUser.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.cookie("unlock-me-token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000, 
+    });
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+      },
+    });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }
-}
+};

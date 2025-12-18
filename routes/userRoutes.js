@@ -1,12 +1,21 @@
 import express from "express";
-import { signinUser } from "../controllers/signin/signinUser.js";
-import { signupUser } from "../controllers/signup/signupUser.js";
-import { authLimiter } from "../middleware/authLimiter.js";
-
+import { protect } from "../middleware/auth.js";
+import {
+  saveBirthday,
+  saveInterests,
+  saveAvatar,getInterests
+} from "../controllers/onboarding/onboardingController.js";
+import multer from "multer";
 
 const router = express.Router();
 
-router.post("/signin",authLimiter, signinUser);
-router.post("/signup",authLimiter, signupUser);
+// Multipart handler for avatar upload
+const upload = multer({ storage: multer.memoryStorage() });
+
+router.get("/interests-options", protect, getInterests);
+
+router.post("/birthday", protect, saveBirthday);
+router.post("/interests", protect, saveInterests);
+router.post("/avatar", protect, upload.single("avatar"), saveAvatar);
 
 export default router;

@@ -42,7 +42,6 @@ export const saveAvatar = async (req, res) => {
     let avatarUrl = null;
 
     if (req.file) {
-      // ذخیره به صورت base64 (برای تست)
       avatarUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
         "base64"
       )}`;
@@ -68,6 +67,22 @@ export const getInterests = async (req, res) => {
     res.status(200).json(doc.categories);
   } catch (err) {
     console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const getUserInterestCategories = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId).select("interests");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json({ userInterestedCategories: user.interests });
+    console.log(user.interests);
+  } catch (err) {
+    console.error("Error fetching user interests:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

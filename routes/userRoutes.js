@@ -3,7 +3,7 @@ import { protect } from "../middleware/auth.js";
 import {
   saveBirthday,
   saveInterests,
-  saveAvatar,getInterests
+  saveAvatar,getInterests,getUserInterestCategories
 } from "../controllers/onboarding/onboardingController.js";
 import multer from "multer";
 
@@ -13,6 +13,8 @@ const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
 router.get("/interests-options", protect, getInterests);
+router.get("/getuserineterestcategories", protect, getUserInterestCategories);
+
 
 router.post("/birthday", protect, saveBirthday);
 router.post("/interests", protect, saveInterests);

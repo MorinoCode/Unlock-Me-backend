@@ -1,5 +1,6 @@
 import User from "../../models/User.js";
 import InitialQuizzes from "../../models/initialQuizzes.js";
+import questionByCategory from "../../models/questionByCategory.js";
 
 // ---------- Birthday ----------
 export const saveBirthday = async (req, res) => {
@@ -71,6 +72,30 @@ export const getInterests = async (req, res) => {
   }
 };
 
+
+export const QuestionsByCategory = async (req, res) => {
+  try {
+    const { selectedCategories } = req.body; 
+
+    if (!selectedCategories || !Array.isArray(selectedCategories) || selectedCategories.length === 0) {
+      return res.status(400).json({ message: "Please provide an array of categories" });
+    }
+
+    const foundQuestions = await questionByCategory.find({
+      categoryLabel: { $in: selectedCategories }
+    });
+
+    if (foundQuestions.length === 0) {
+      return res.status(404).json({ message: "No questions found for these categories" });
+    }
+
+    res.status(200).json(foundQuestions);
+  } catch (err) {
+    console.error("Error fetching questions:", err);
+    res.status(500).json({ message: "Server error while fetching questions" });
+  }
+};
+
 export const getUserInterestCategories = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select("interests");
@@ -80,9 +105,49 @@ export const getUserInterestCategories = async (req, res) => {
     }
 
     res.status(200).json({ userInterestedCategories: user.interests });
-    console.log(user.interests);
   } catch (err) {
     console.error("Error fetching user interests:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const saveUserInterestCategoriesQuestinsAnswer = async (req, res) => {
+  try {
+    const { quizResults } = req.body; 
+
+    if (!quizResults || !Array.isArray(quizResults)) {
+      return res.status(400).json({ message: "Invalid quiz data" });
+    }
+
+    
+    const groupedResults = {};
+    quizResults.forEach(item => {
+      const { category, ...rest } = item;
+      if (!groupedResults[category]) {
+        groupedResults[category] = [];
+      }
+      groupedResults[category].push({
+        ...rest,
+        answeredAt: new Date()
+      });
+    });
+
+    
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.userId,
+      { 
+        $set: { "questionsbycategoriesResults.categories": groupedResults } 
+      },
+      { new: true }
+    );
+
+    res.status(200).json({ 
+      message: "Quiz results saved successfully",
+      categoriesSaved: Object.keys(groupedResults),
+      updatedUser
+    });
+  } catch (err) {
+    console.error("Error saving quiz results:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

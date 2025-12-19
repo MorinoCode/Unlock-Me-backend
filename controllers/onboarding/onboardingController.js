@@ -1,5 +1,6 @@
 import User from "../../models/User.js";
 import InitialQuizzes from "../../models/initialQuizzes.js";
+import questionByCategory from "../../models/questionByCategory.js";
 
 // ---------- Birthday ----------
 export const saveBirthday = async (req, res) => {
@@ -69,5 +70,29 @@ export const getInterests = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+
+export const QuestionsByCategory = async (req, res) => {
+  try {
+    const { selectedCategories } = req.body; 
+
+    if (!selectedCategories || !Array.isArray(selectedCategories) || selectedCategories.length === 0) {
+      return res.status(400).json({ message: "Please provide an array of categories" });
+    }
+
+    const foundQuestions = await questionByCategory.find({
+      categoryLabel: { $in: selectedCategories }
+    });
+
+    if (foundQuestions.length === 0) {
+      return res.status(404).json({ message: "No questions found for these categories" });
+    }
+
+    res.status(200).json(foundQuestions);
+  } catch (err) {
+    console.error("Error fetching questions:", err);
+    res.status(500).json({ message: "Server error while fetching questions" });
   }
 };

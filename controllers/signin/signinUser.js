@@ -2,6 +2,7 @@ import User from "../../models/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
+
 export const signinUser =async (req, res) => {
   let { email, password } = req.body;
   email = email.toLowerCase();

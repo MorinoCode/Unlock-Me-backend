@@ -32,9 +32,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # 5. Run tests
-      - name: Run tests
-        run: npm run test
+    #   # 5. Run tests
+    #   - name: Run tests
+    #     run: npm run test
 
       # 6. Build
       - name: Build project

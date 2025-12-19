@@ -14,20 +14,23 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 const allowedOrigins = [
-  'http://localhost:5173', 
+  'http://localhost:5173',
   'https://unlock-me-frontend.vercel.app'
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    
     if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+
+    const isVercelPreview = origin.endsWith('.vercel.app');
+    const isAllowed = allowedOrigins.includes(origin);
+
+    if (isAllowed || isVercelPreview) {
+      return callback(null, true);
+    } else {
+      const msg = 'CORS policy: This origin is not allowed.';
       return callback(new Error(msg), false);
     }
-    return callback(null, true);
   },
   credentials: true 
 }));

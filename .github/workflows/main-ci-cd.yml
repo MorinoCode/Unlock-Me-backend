@@ -32,19 +32,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
-    #   # 5. Run tests
-    #   - name: Run tests
-    #     run: npm run test
-
-      
+      #   # 5. Run tests
+      #   - name: Run tests
+      #     run: npm run test
 
       # 7. Deploy to Render
-      - name: Install Render CLI
-        run: npm install -g @render/cli
-
       - name: Deploy to Render
-        env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
-          render services:redeploy ${{ secrets.RENDER_SERVICE_ID }} --wait
-
+          curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}

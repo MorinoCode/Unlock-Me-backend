@@ -43,7 +43,6 @@ export const saveAvatar = async (req, res) => {
     let avatarUrl = null;
 
     if (req.file) {
-      // ذخیره به صورت base64 (برای تست)
       avatarUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
         "base64"
       )}`;
@@ -94,5 +93,61 @@ export const QuestionsByCategory = async (req, res) => {
   } catch (err) {
     console.error("Error fetching questions:", err);
     res.status(500).json({ message: "Server error while fetching questions" });
+  }
+};
+
+export const getUserInterestCategories = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId).select("interests");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json({ userInterestedCategories: user.interests });
+  } catch (err) {
+    console.error("Error fetching user interests:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const saveUserInterestCategoriesQuestinsAnswer = async (req, res) => {
+  try {
+    const { quizResults } = req.body; 
+
+    if (!quizResults || !Array.isArray(quizResults)) {
+      return res.status(400).json({ message: "Invalid quiz data" });
+    }
+
+    
+    const groupedResults = {};
+    quizResults.forEach(item => {
+      const { category, ...rest } = item;
+      if (!groupedResults[category]) {
+        groupedResults[category] = [];
+      }
+      groupedResults[category].push({
+        ...rest,
+        answeredAt: new Date()
+      });
+    });
+
+    
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.userId,
+      { 
+        $set: { "questionsbycategoriesResults.categories": groupedResults } 
+      },
+      { new: true }
+    );
+
+    res.status(200).json({ 
+      message: "Quiz results saved successfully",
+      categoriesSaved: Object.keys(groupedResults),
+      updatedUser
+    });
+  } catch (err) {
+    console.error("Error saving quiz results:", err);
+    res.status(500).json({ message: "Server error" });
   }
 };

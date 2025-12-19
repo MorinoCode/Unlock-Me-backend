@@ -11,10 +11,23 @@ const userSchema = new mongoose.Schema(
     birthday: { type: String },
     interests: [String],
     avatar: String,
+    questionsbycategoriesResults: {
+      categories: {
+        type: Map,
+        of: [
+          {
+            questionText: String,
+            selectedText: String,
+            trait: String,
+            answeredAt: { type: Date, default: Date.now },
+          },
+        ],
+        default: {},
+      },
+    },
   },
   { timestamps: true }
 );
-
 
 const User = mongoose.model("User", userSchema);
 export default User;

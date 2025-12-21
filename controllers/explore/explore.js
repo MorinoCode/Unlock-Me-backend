@@ -1,5 +1,26 @@
 import User from "../../models/User.js";
 
+function calculateCompatibility(me, other) {
+  let score = 0;
+  
+  
+  const sharedInterests = me.interests.filter(i => other.interests.includes(i));
+  score += Math.min(sharedInterests.length * 10, 30);
+
+  
+  if (me.location?.city === other.location?.city) {
+    score += 20;
+  }
+
+  
+  if (me.questionsbycategoriesResults?.categories && other.questionsbycategoriesResults?.categories) {
+    
+    score += 30;
+  }
+
+  return Math.min(score + Math.floor(Math.random() * 20), 100);
+}
+
 export const getUserLocation = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select("location");
@@ -71,28 +92,27 @@ export const getExploreMatches = async (req, res) => {
   }
 };
 
-// تابع محاسبه امتیاز (مطمئن شو این تابع در همین فایل وجود دارد)
-function calculateCompatibility(me, other) {
-  let score = 0;
-  
-  // ۱. امتیاز برای علایق مشترک (هر علاقه ۵ امتیاز، تا سقف ۳۰ امتیاز)
-  const sharedInterests = me.interests.filter(i => other.interests.includes(i));
-  score += Math.min(sharedInterests.length * 10, 30);
+export const getUserDetails = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user.userId;
 
-  // ۲. امتیاز برای شهر مشترک (۲۰ امتیاز)
-  if (me.location?.city === other.location?.city) {
-    score += 20;
+    const targetUser = await User.findById(userId).select("-password");
+    if (!targetUser) return res.status(404).json({ message: "User not found" });
+
+    // Calculate match score again for consistency
+    const me = await User.findById(currentUserId);
+    const score = calculateCompatibility(me, targetUser);
+
+    res.status(200).json({
+      ...targetUser.toObject(),
+      matchScore: score
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error" ,err});
   }
+};
 
-  // ۳. امتیاز برای شباهت تریت‌ها (Traits) در سوالات
-  if (me.questionsbycategoriesResults?.categories && other.questionsbycategoriesResults?.categories) {
-    // تبدیل Map به آبجکت برای پیمایش راحت‌تر اگر نیاز بود، 
-    // اما اینجا فرض بر این است که دیتا ساختار درستی دارد
-    score += 30; // به صورت پیش‌فرض برای تست دیتای Seed
-  }
 
-  // شبیه‌سازی مقداری نوسان برای واقعی‌تر شدن اعداد
-  return Math.min(score + Math.floor(Math.random() * 20), 100);
-}
 
 

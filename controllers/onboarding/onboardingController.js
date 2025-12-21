@@ -170,6 +170,8 @@ export const saveLocation = async (req, res) => {
   }
 };
 
+
+
 export const saveBio = async (req, res) => {
   try {
     const { bio } = req.body;
@@ -186,3 +188,4 @@ export const saveBio = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+

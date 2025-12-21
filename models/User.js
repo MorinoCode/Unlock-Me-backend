@@ -8,23 +8,30 @@ const userSchema = new mongoose.Schema(
     gender: { type: String },
     lookingFor: { type: String },
     role: { type: String, default: "user" },
-    
-    // Updated birthday to store day, month, year separately
+
     birthday: {
       day: String,
       month: String,
-      year: String
+      year: String,
     },
 
-    // New Fields for Onboarding
     location: {
       country: { type: String, default: "" },
-      city: { type: String, default: "" }
+      city: { type: String, default: "" },
     },
-    bio: { 
-      type: String, 
-      maxlength: 150, 
-      default: "" 
+    bio: {
+      type: String,
+      maxlength: 150,
+      default: "",
+    },
+    subscription: {
+      plan: {
+        type: String,
+        enum: ["free", "premium", "gold"],
+        default: "free",
+      },
+      expiresAt: { type: Date, default: null },
+      status: { type: String, default: "active" },
     },
 
     interests: [String],

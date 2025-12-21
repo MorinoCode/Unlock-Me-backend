@@ -7,6 +7,7 @@ import cookieParser from "cookie-parser";
 
 import usersRoutes from "./routes/usersRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
+import userOnboardingRoutes from "./routes/userOnboardingRoutes.js";
 
 dotenv.config();
 const app = express();
@@ -39,7 +40,8 @@ app.use(cookieParser());
 
 // Routes
 app.use("/api/users", usersRoutes);
-app.use("/api/user/onboarding", userRoutes);
+app.use("/api/user", userRoutes);
+app.use("/api/user/onboarding", userOnboardingRoutes);
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI)

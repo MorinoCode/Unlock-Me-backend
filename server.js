@@ -3,15 +3,19 @@ import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
-
+import http from "http";
+import { Server } from "socket.io";
 
 import usersRoutes from "./routes/usersRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import userOnboardingRoutes from "./routes/userOnboardingRoutes.js";
+import chatRoutes from "./routes/chatRoutes.js";
 
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+const server = http.createServer(app);
 
 // Middleware
 const allowedOrigins = [
@@ -19,13 +23,11 @@ const allowedOrigins = [
   'https://unlock-me-frontend.vercel.app'
 ];
 
-app.use(cors({
+const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-
     const isVercelPreview = origin.endsWith('.vercel.app');
     const isAllowed = allowedOrigins.includes(origin);
-
     if (isAllowed || isVercelPreview) {
       return callback(null, true);
     } else {
@@ -34,9 +36,29 @@ app.use(cors({
     }
   },
   credentials: true 
-}));
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
+app.use("/api/chat", chatRoutes);
+
+const io = new Server(server, {
+  cors: corsOptions  
+});
+
+app.set("io", io);
+
+io.on("connection", (socket) => {
+  socket.on("join_room", (userId) => {
+    socket.join(userId);
+  });
+
+  socket.on("disconnect", () => {
+    //Disconnect
+  });
+});
+// -------------------------
 
 // Routes
 app.use("/api/users", usersRoutes);
@@ -45,8 +67,8 @@ app.use("/api/user/onboarding", userOnboardingRoutes);
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI)
-    .then(() => {
-        console.log("MongoDB connected successfully");
-        app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-    })
-    .catch((err) => console.log("MongoDB connection error:", err));
+  .then(() => {
+    console.log("MongoDB connected successfully");
+    server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })
+  .catch((err) => console.log("MongoDB connection error:", err));

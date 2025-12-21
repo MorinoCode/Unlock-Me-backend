@@ -9,10 +9,10 @@ export const saveBirthday = async (req, res) => {
     if (!day || !month || !year)
       return res.status(400).json({ message: "Birthday is required" });
 
-    const birthday = `${year}-${String(month).padStart(2, "0")}-${String(
-      day
-    ).padStart(2, "0")}`;
-    await User.findByIdAndUpdate(req.user.userId, { birthday });
+    // ذخیره به صورت آبجکت مطابق با مدل جدید
+    await User.findByIdAndUpdate(req.user.userId, { 
+      birthday: { day, month, year } 
+    });
 
     res.status(200).json({ message: "Birthday saved" });
   } catch (err) {
@@ -148,6 +148,41 @@ export const saveUserInterestCategoriesQuestinsAnswer = async (req, res) => {
     });
   } catch (err) {
     console.error("Error saving quiz results:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const saveLocation = async (req, res) => {
+  try {
+    const { country, city } = req.body;
+    if (!country || !city) {
+      return res.status(400).json({ message: "Country and City are required" });
+    }
+
+    await User.findByIdAndUpdate(req.user.userId, {
+      location: { country, city }
+    });
+
+    res.status(200).json({ message: "Location saved successfully" });
+  } catch (err) {
+    console.error("Error saving location:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const saveBio = async (req, res) => {
+  try {
+    const { bio } = req.body;
+    
+    if (bio && bio.length > 150) {
+      return res.status(400).json({ message: "Bio cannot exceed 150 characters" });
+    }
+
+    await User.findByIdAndUpdate(req.user.userId, { bio: bio || "" });
+
+    res.status(200).json({ message: "Bio saved successfully" });
+  } catch (err) {
+    console.error("Error saving bio:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

@@ -37,6 +37,24 @@ const userSchema = new mongoose.Schema(
         default: "active",
       },
     },
+    likedUsers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    likedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    dislikedUsers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
 
     interests: [String],
     avatar: { type: String, default: "" },

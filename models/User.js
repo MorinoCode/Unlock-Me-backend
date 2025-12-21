@@ -31,7 +31,11 @@ const userSchema = new mongoose.Schema(
         default: "free",
       },
       expiresAt: { type: Date, default: null },
-      status: { type: String, default: "active" },
+      status: {
+        type: String,
+        enum: ["active", "expired", "canceled"],
+        default: "active",
+      },
     },
 
     interests: [String],

@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
 
+function arrayLimit(val) {
+  return val.length <= 6;
+}
+
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
@@ -73,6 +77,13 @@ const userSchema = new mongoose.Schema(
         default: {},
       },
     },
+    phone: { type: String, default: "" },
+    detailedAddress: { type: String, default: "" }, // برای اینکه با city/country تداخل نکند
+    gallery: {
+      type: [String],
+      validate: [arrayLimit, '{PATH} exceeds the limit of 6'] // محدودیت ۶ عکس
+    },
+    
   },
   { timestamps: true }
 );

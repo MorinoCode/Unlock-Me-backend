@@ -3,18 +3,23 @@ import Message from "../../models/Message.js";
 
 export const sendMessage = async (req, res) => {
   try {
-    const { receiverId, text, parentMessage } = req.body;
-    const senderId = req.user.id; 
+    const { receiverId, text, parentMessage, fileUrl, fileType } = req.body;
+    const senderId = req.user.userId || req.user.id; 
 
     const newMessage = new Message({
       sender: senderId,
       receiver: receiverId,
       text,
+      fileUrl, // اضافه شد
+      fileType: fileType || "text", // اضافه شد
       parentMessage: parentMessage || null,
       isRead: false
     });
 
     await newMessage.save();
+
+    const io = req.app.get("io");
+    io.to(receiverId).emit("receive_message", newMessage);
 
     res.status(201).json(newMessage);
   } catch (error) {
@@ -93,6 +98,79 @@ export const markAsRead = async (req, res) => {
     io.to(otherUserId).emit("messages_seen", { seenBy: myId });
 
     res.status(200).json({ message: "Messages marked as read" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+export const editMessage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text } = req.body;
+    const io = req.app.get("io");
+
+    const updatedMessage = await Message.findByIdAndUpdate(
+      id,
+      { text, isEdited: true },
+      { new: true }
+    );
+
+    io.to(updatedMessage.receiver.toString()).to(updatedMessage.sender.toString()).emit("message_edited", {
+      id: updatedMessage._id,
+      text: updatedMessage.text
+    });
+
+    res.status(200).json(updatedMessage);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const deleteMessage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const io = req.app.get("io");
+
+    const message = await Message.findById(id);
+    message.isDeleted = true;
+    message.text = "This message was deleted";
+    await message.save();
+
+    io.to(message.receiver.toString()).to(message.sender.toString()).emit("message_deleted", id);
+
+    res.status(200).json({ message: "Deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const reactToMessage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { emoji } = req.body;
+    const userId = req.user.userId || req.user.id; 
+    const io = req.app.get("io");
+
+    const message = await Message.findById(id);
+    if (!message) return res.status(404).json({ message: "Message not found" });
+
+    const existingReaction = message.reactions.find(r => r.userId === userId);
+
+    if (existingReaction) {
+      existingReaction.emoji = emoji;
+    } else {
+      message.reactions.push({ userId, emoji });
+    }
+
+    await message.save();
+
+    io.to(message.receiver.toString()).to(message.sender.toString()).emit("reaction_updated", {
+      id: message._id,
+      reactions: message.reactions
+    });
+
+    res.status(200).json(message);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

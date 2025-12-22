@@ -19,23 +19,23 @@ const server = http.createServer(app);
 
 // Middleware
 const allowedOrigins = [
-  'http://localhost:5173',
-  'https://unlock-me-frontend.vercel.app'
+  "http://localhost:5173",
+  "https://unlock-me-frontend.vercel.app",
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-    const isVercelPreview = origin.endsWith('.vercel.app');
+    const isVercelPreview = origin.endsWith(".vercel.app");
     const isAllowed = allowedOrigins.includes(origin);
     if (isAllowed || isVercelPreview) {
       return callback(null, true);
     } else {
-      const msg = 'CORS policy: This origin is not allowed.';
+      const msg = "CORS policy: This origin is not allowed.";
       return callback(new Error(msg), false);
     }
   },
-  credentials: true 
+  credentials: true,
 };
 
 app.use(cors(corsOptions));
@@ -44,7 +44,7 @@ app.use(cookieParser());
 app.use("/api/chat", chatRoutes);
 
 const io = new Server(server, {
-  cors: corsOptions  
+  cors: corsOptions,
 });
 
 app.set("io", io);
@@ -52,6 +52,13 @@ app.set("io", io);
 io.on("connection", (socket) => {
   socket.on("join_room", (userId) => {
     socket.join(userId);
+  });
+  socket.on("typing", ({ receiverId, senderId }) => {
+    io.to(receiverId).emit("display_typing", { senderId });
+  });
+
+  socket.on("stop_typing", ({ receiverId }) => {
+    io.to(receiverId).emit("hide_typing");
   });
 
   socket.on("disconnect", () => {
@@ -66,7 +73,8 @@ app.use("/api/user", userRoutes);
 app.use("/api/user/onboarding", userOnboardingRoutes);
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI)
+mongoose
+  .connect(process.env.MONGO_URI)
   .then(() => {
     console.log("MongoDB connected successfully");
     server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

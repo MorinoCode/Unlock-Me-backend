@@ -1,24 +1,39 @@
 import Conversation from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
+import sanitizeHtml from 'sanitize-html';
 
 export const sendMessage = async (req, res) => {
   try {
     const { receiverId, text, parentMessage, fileUrl, fileType } = req.body;
-    const senderId = req.user.userId || req.user.id; 
+    const senderId = req.user.userId || req.user.id;
+    const io = req.app.get("io");
+
+    // امنیت: جلوگیری از ارسال پیام کاملاً خالی
+    if (!text && !fileUrl) {
+      return res.status(400).json({ error: "Cannot send empty message" });
+    }
+
+    // امنیت: محدودیت حجم فایل (Base64 معمولاً ۳۳٪ بزرگتر از فایل اصلی است)
+    if (fileUrl && fileUrl.length > 7 * 1024 * 1024) { // حدود ۵ مگابایت واقعی
+      return res.status(400).json({ error: "File size too large (Max 5MB)" });
+    }
+
+    // امنیت: پاکسازی متن از تگ‌های مخرب
+    const cleanText = text ? sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} }) : "";
 
     const newMessage = new Message({
       sender: senderId,
       receiver: receiverId,
-      text,
-      fileUrl, // اضافه شد
-      fileType: fileType || "text", // اضافه شد
+      text: cleanText,
+      fileUrl: fileUrl || null,
+      fileType: fileType || "text",
       parentMessage: parentMessage || null,
       isRead: false
     });
 
     await newMessage.save();
 
-    const io = req.app.get("io");
+    // ارسال بلادرنگ به دریافت کننده
     io.to(receiverId).emit("receive_message", newMessage);
 
     res.status(201).json(newMessage);
@@ -36,16 +51,14 @@ export const getMessages = async (req, res) => {
       "Surrogate-Control": "no-store",
     });
     const { otherUserId } = req.params;
-    const myId = req.user.userId;
+    const myId = req.user.userId || req.user.id;
 
-    // We must find messages where:
-    // (Sender is ME AND Receiver is HIM) OR (Sender is HIM AND Receiver is ME)
     const messages = await Message.find({
       $or: [
         { sender: myId, receiver: otherUserId },
         { sender: otherUserId, receiver: myId }
       ]
-    }).sort({ createdAt: 1 }); // Sort by time ascending
+    }).sort({ createdAt: 1 });
 
     res.status(200).json(messages);
   } catch (error) {
@@ -55,7 +68,7 @@ export const getMessages = async (req, res) => {
 
 export const getConversations = async (req, res) => {
   try {
-    const myId = req.user.userId;
+    const myId = req.user.userId || req.user.id;
 
     const conversations = await Conversation.find({
       participants: myId,
@@ -66,8 +79,8 @@ export const getConversations = async (req, res) => {
     const conversationsWithUnread = await Promise.all(
       conversations.map(async (conv) => {
         const unreadCount = await Message.countDocuments({
-          conversationId: conv._id,
           receiver: myId,
+          sender: conv.participants.find(p => p._id.toString() !== myId.toString()),
           isRead: false,
         });
 
@@ -87,7 +100,7 @@ export const getConversations = async (req, res) => {
 export const markAsRead = async (req, res) => {
   try {
     const { otherUserId } = req.params;
-    const myId = req.user.userId;
+    const myId = req.user.userId || req.user.id;
 
     await Message.updateMany(
       { sender: otherUserId, receiver: myId, isRead: false },
@@ -102,7 +115,6 @@ export const markAsRead = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
 
 export const editMessage = async (req, res) => {
   try {

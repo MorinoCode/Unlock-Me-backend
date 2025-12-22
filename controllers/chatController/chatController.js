@@ -3,40 +3,22 @@ import Message from "../../models/Message.js";
 
 export const sendMessage = async (req, res) => {
   try {
-    const { receiverId, text } = req.body;
-    const senderId = req.user.userId;
-    const io = req.app.get("io");
-
-    let conversation = await Conversation.findOne({
-      participants: { $all: [senderId, receiverId] },
-    });
-
-    if (!conversation) {
-      conversation = await Conversation.create({
-        participants: [senderId, receiverId],
-      });
-    }
-    // ------------------------------------------
+    const { receiverId, text, parentMessage } = req.body;
+    const senderId = req.user.id; 
 
     const newMessage = new Message({
-      conversationId: conversation._id,
       sender: senderId,
       receiver: receiverId,
       text,
+      parentMessage: parentMessage || null,
+      isRead: false
     });
 
     await newMessage.save();
 
-    conversation.lastMessage = { text, sender: senderId, createdAt: new Date() };
-    await conversation.save();
-
-    
-    io.to(receiverId).emit("receive_message", newMessage); 
-
     res.status(201).json(newMessage);
   } catch (error) {
-    console.error("SendMessage Error:", error);
-    res.status(500).json({ message: "Error sending message", error: error.message });
+    res.status(500).json({ error: error.message });
   }
 };
 

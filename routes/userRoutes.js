@@ -13,7 +13,6 @@ import {
 const router = express.Router();
 
 router.get("/location", protect, getUserLocation);
-router.get("/explore", protect, getExploreMatches);
 router.get("/details/:userId", protect, getUserDetails); 
 
 

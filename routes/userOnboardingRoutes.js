@@ -21,12 +21,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 router.get("/interests-options", protect, getInterests);
 router.get("/get-user-interests", protect, getUserInterestCategories);
 router.post("/questions-by-category", protect, QuestionsByCategory);
-router.post(
-  "/saveUserInterestCategoriesQuestinsAnswer",
-  protect,
-  saveUserInterestCategoriesQuestinsAnswer
-);
-
+router.post("/saveUserInterestCategoriesQuestinsAnswer",protect,saveUserInterestCategoriesQuestinsAnswer);
 router.post("/birthday", protect, saveBirthday);
 router.post("/interests", protect, saveInterests);
 router.post("/avatar", protect, upload.single("avatar"), saveAvatar);

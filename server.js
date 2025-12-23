@@ -5,7 +5,6 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import http from "http";
 import { Server } from "socket.io";
-import mongoSanitize from 'express-mongo-sanitize';
 import usersRoutes from "./routes/usersRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import userOnboardingRoutes from "./routes/userOnboardingRoutes.js";

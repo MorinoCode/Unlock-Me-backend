@@ -1,6 +1,7 @@
+// userRoutes.js
 import express from "express";
 import { protect } from "../middleware/auth.js";
-import { getExploreMatches, getUserDetails, getUserLocation } from "../controllers/explore/explore.js";
+import { getUserDetails, getUserLocation } from "../controllers/explore/explore.js";
 import { getMatchesDashboard, handleDislike, handleLike } from "../controllers/userActions/userActions.js";
 import { 
   getUserById, 

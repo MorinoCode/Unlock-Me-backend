@@ -2,26 +2,32 @@ import Conversation from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
 import sanitizeHtml from 'sanitize-html';
 
+
+
 export const sendMessage = async (req, res) => {
   try {
     const { receiverId, text, parentMessage, fileUrl, fileType } = req.body;
     const senderId = req.user.userId || req.user.id;
     const io = req.app.get("io");
 
-    // امنیت: جلوگیری از ارسال پیام کاملاً خالی
     if (!text && !fileUrl) {
       return res.status(400).json({ error: "Cannot send empty message" });
     }
 
-    // امنیت: محدودیت حجم فایل (Base64 معمولاً ۳۳٪ بزرگتر از فایل اصلی است)
-    if (fileUrl && fileUrl.length > 7 * 1024 * 1024) { // حدود ۵ مگابایت واقعی
-      return res.status(400).json({ error: "File size too large (Max 5MB)" });
-    }
-
-    // امنیت: پاکسازی متن از تگ‌های مخرب
     const cleanText = text ? sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} }) : "";
 
+    let conversation = await Conversation.findOne({
+      participants: { $all: [senderId, receiverId] }
+    });
+
+    if (!conversation) {
+      conversation = new Conversation({
+        participants: [senderId, receiverId]
+      });
+    }
+
     const newMessage = new Message({
+      conversationId: conversation._id,
       sender: senderId,
       receiver: receiverId,
       text: cleanText,
@@ -33,12 +39,52 @@ export const sendMessage = async (req, res) => {
 
     await newMessage.save();
 
-    // ارسال بلادرنگ به دریافت کننده
+    conversation.lastMessage = {
+      text: cleanText || (fileType === "image" ? "📷 Image" : "📄 File"),
+      sender: senderId,
+      createdAt: new Date()
+    };
+    
+    await conversation.save();
+
     io.to(receiverId).emit("receive_message", newMessage);
 
     res.status(201).json(newMessage);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const getConversations = async (req, res) => {
+  try {
+    const myId = req.user.userId || req.user.id;
+
+    const conversations = await Conversation.find({
+      participants: myId,
+    })
+      .populate("participants", "name avatar isOnline")
+      .sort({ updatedAt: -1 });
+
+    const conversationsWithUnread = await Promise.all(
+      conversations.map(async (conv) => {
+        const otherUser = conv.participants.find(p => p._id.toString() !== myId.toString());
+        
+        const unreadCount = await Message.countDocuments({
+          receiver: myId,
+          sender: otherUser ? otherUser._id : null,
+          isRead: false,
+        });
+
+        return {
+          ...conv.toObject(),
+          unreadCount,
+        };
+      })
+    );
+
+    res.status(200).json(conversationsWithUnread);
+  } catch (error) {
+    res.status(500).json({ message: "Error", error: error.message });
   }
 };
 
@@ -63,37 +109,6 @@ export const getMessages = async (req, res) => {
     res.status(200).json(messages);
   } catch (error) {
     res.status(500).json({ error: error.message });
-  }
-};
-
-export const getConversations = async (req, res) => {
-  try {
-    const myId = req.user.userId || req.user.id;
-
-    const conversations = await Conversation.find({
-      participants: myId,
-    })
-      .populate("participants", "name avatar")
-      .sort({ updatedAt: -1 });
-
-    const conversationsWithUnread = await Promise.all(
-      conversations.map(async (conv) => {
-        const unreadCount = await Message.countDocuments({
-          receiver: myId,
-          sender: conv.participants.find(p => p._id.toString() !== myId.toString()),
-          isRead: false,
-        });
-
-        return {
-          ...conv.toObject(),
-          unreadCount,
-        };
-      })
-    );
-
-    res.status(200).json(conversationsWithUnread);
-  } catch (error) {
-    res.status(500).json({ message: "Error", error: error.message });
   }
 };
 

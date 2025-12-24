@@ -12,6 +12,7 @@ const conversationSchema = new mongoose.Schema(
       text: String,
       sender: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       createdAt: { type: Date, default: Date.now },
+      unreadCount: { type: Map, of: Number, default: {} }
     },
   },
   { timestamps: true }

@@ -111,18 +111,20 @@ export const getUserInterestCategories = async (req, res) => {
   }
 };
 
+// اصلاح متد ذخیره برای جلوگیری از پاک شدن علایق قبلی
 export const saveUserInterestCategoriesQuestinsAnswer = async (req, res) => {
   try {
     const { quizResults } = req.body; 
-
     if (!quizResults || !Array.isArray(quizResults)) {
       return res.status(400).json({ message: "Invalid quiz data" });
     }
 
-    
     const groupedResults = {};
+    const categoryNames = new Set(); 
+
     quizResults.forEach(item => {
       const { category, ...rest } = item;
+      categoryNames.add(category); 
       if (!groupedResults[category]) {
         groupedResults[category] = [];
       }
@@ -132,18 +134,24 @@ export const saveUserInterestCategoriesQuestinsAnswer = async (req, res) => {
       });
     });
 
-    
+    const updateQuery = {};
+    for (const category in groupedResults) {
+      updateQuery[`questionsbycategoriesResults.categories.${category}`] = groupedResults[category];
+    }
+
     const updatedUser = await User.findByIdAndUpdate(
       req.user.userId,
       { 
-        $set: { "questionsbycategoriesResults.categories": groupedResults } 
+        $set: updateQuery,
+        // اضافه کردن نام کتگوری به آرایه interests برای نمایش در لیست اصلی
+        $addToSet: { interests: { $each: Array.from(categoryNames) } }
       },
       { new: true }
     );
 
     res.status(200).json({ 
-      message: "Quiz results saved successfully",
-      categoriesSaved: Object.keys(groupedResults),
+      message: "Category and Interests updated successfully",
+      categoriesSaved: Array.from(categoryNames),
       updatedUser
     });
   } catch (err) {

@@ -10,25 +10,26 @@ export const handleLike = async (req, res) => {
     const { targetUserId } = req.body;
     const myId = req.user.userId;
 
-    if (myId === targetUserId)
+    if (myId === targetUserId) {
       return res.status(400).json({ message: "You cannot like yourself" });
+    }
 
     await Promise.all([
       User.findByIdAndUpdate(myId, {
         $addToSet: { likedUsers: targetUserId },
+        $pull: { dislikedUsers: targetUserId }
       }),
       User.findByIdAndUpdate(targetUserId, {
-        $addToSet: { likedBy: myId },
+        $addToSet: { likedBy: myId }
       }),
     ]);
 
-    // 3. Optional: Check for a Match (if they already liked you)
-    const targetUser = await User.findById(targetUserId);
+    const targetUser = await User.findById(targetUserId).select("likedUsers");
     const isMatch = targetUser.likedUsers.includes(myId);
 
     res.status(200).json({
       message: "User liked successfully",
-      isMatch: isMatch, // If true, you can trigger a "Match!" popup
+      isMatch: isMatch
     });
   } catch (err) {
     res.status(500).json({ message: "Server error", err });
@@ -40,11 +41,20 @@ export const handleDislike = async (req, res) => {
     const { targetUserId } = req.body;
     const myId = req.user.userId;
 
+    if (myId === targetUserId) {
+      return res.status(400).json({ message: "You cannot dislike yourself" });
+    }
+
     await User.findByIdAndUpdate(myId, {
       $addToSet: { dislikedUsers: targetUserId },
+      $pull: { likedUsers: targetUserId }
     });
 
-    res.status(200).json({ message: "User disliked" });
+    await User.findByIdAndUpdate(targetUserId, {
+      $pull: { likedBy: myId }
+    });
+
+    res.status(200).json({ message: "User disliked successfully" });
   } catch (err) {
     res.status(500).json({ message: "Server error", err });
   }

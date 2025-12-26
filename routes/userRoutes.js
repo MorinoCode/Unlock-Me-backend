@@ -5,15 +5,25 @@ import { getUserDetails, getUserLocation } from "../controllers/explore/explore.
 import { getMatchesDashboard, handleDislike, handleLike } from "../controllers/userActions/userActions.js";
 import { 
   getUserById, 
+  getUserInformation, 
   updateCategoryAnswers, 
   updateGallery, 
   updatePassword, 
   updateProfileInfo 
 } from "../controllers/userController/userController.js";
+import { authLimiter } from "../middleware/authLimiter.js";
+import { signinUser } from "../controllers/signin/signinUser.js";
+import { signupUser } from "../controllers/signup/signupUser.js";
+import { signoutUser } from "../controllers/signout/signoutUser.js";
 
 const router = express.Router();
 
+router.post("/signin",authLimiter, signinUser);
+router.post("/signup",authLimiter, signupUser);
+router.post("/signout",authLimiter, signoutUser);
+
 router.get("/location", protect, getUserLocation);
+router.get("/getUserInformation", protect, getUserInformation);
 router.get("/details/:userId", protect, getUserDetails); 
 
 

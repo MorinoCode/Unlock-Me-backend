@@ -12,6 +12,7 @@ import chatRoutes from "./routes/chatRoutes.js";
 import exploreRoutes from "./routes/exploreRoutes.js"
 import matchesRoutes from "./routes/matchesRoutes.js"
 import swipeRoutes from "./routes/swipeRoutes.js"
+import locationRoutes from "./routes/locationRoutes.js"
 
 dotenv.config();
 const app = express();
@@ -66,6 +67,7 @@ app.use("/api/user/onboarding", userOnboardingRoutes);
 app.use("/api/user/matches", matchesRoutes);
 app.use("/api/explore", exploreRoutes);
 app.use("/api/swipe", swipeRoutes);
+app.use("/api/locations", locationRoutes);
 
 mongoose
   .connect(process.env.MONGO_URI)

@@ -1,25 +1,17 @@
-name: Dev CI (Backend)
+name: Stage CI (Backend)
 
 on:
   push:
     branches:
-      - dev
+      - stage
   pull_request:
     branches:
-      - dev
+      - stage
 
 jobs:
-  validate-dev:
+  validate-stage:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Source Branch
-        if: github.event_name == 'pull_request'
-        run: |
-          if [[ "${{ github.head_ref }}" != "stage" ]]; then
-            echo "Error: Forbidden! You can only merge into 'dev' from 'stage' branch."
-            exit 1
-          fi
-
       - name: Checkout code
         uses: actions/checkout@v4
 

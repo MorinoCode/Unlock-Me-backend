@@ -1,4 +1,4 @@
-name: Main CI/CD
+name: Main CI/CD (Backend Production)
 
 on:
   push:
@@ -9,34 +9,38 @@ on:
       - main
 
 jobs:
-  build-test-deploy:
+  deploy-production:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Checkout
+      - name: Check Source Branch
+        if: github.event_name == 'pull_request'
+        run: |
+          if [[ "${{ github.head_ref }}" != "dev" ]]; then
+            echo "Error: Forbidden! You can only merge into 'main' from 'dev' branch."
+            exit 1
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Setup Node
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      # 3. Install dependencies
       - name: Install dependencies
         run: npm ci
 
-      # 4. Lint
       - name: Lint
         run: npm run lint
 
-      #   # 5. Run tests
-      #   - name: Run tests
-      #     run: npm run test
-
-      # 7. Deploy to Render
       - name: Deploy to Render
+        if: github.event_name == 'push'
         run: |
-          curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
+          if [ -n "${{ secrets.RENDER_DEPLOY_HOOK }}" ]; then
+            curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
+          else
+            echo "Error: RENDER_DEPLOY_HOOK secret is missing!"
+            exit 1
+          fi

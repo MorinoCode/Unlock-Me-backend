@@ -11,6 +11,8 @@ import userOnboardingRoutes from "./routes/userOnboardingRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import exploreRoutes from "./routes/exploreRoutes.js"
 import matchesRoutes from "./routes/matchesRoutes.js"
+import swipeRoutes from "./routes/swipeRoutes.js"
+import locationRoutes from "./routes/locationRoutes.js"
 
 dotenv.config();
 const app = express();
@@ -18,7 +20,6 @@ const PORT = process.env.PORT || 5000;
 
 const server = http.createServer(app);
 
-// محدودیت تعداد درخواست برای امنیت کل اپلیکیشن
 
 
 const corsOptions = {
@@ -65,6 +66,8 @@ app.use("/api/user", userRoutes);
 app.use("/api/user/onboarding", userOnboardingRoutes);
 app.use("/api/user/matches", matchesRoutes);
 app.use("/api/explore", exploreRoutes);
+app.use("/api/swipe", swipeRoutes);
+app.use("/api/locations", locationRoutes);
 
 mongoose
   .connect(process.env.MONGO_URI)

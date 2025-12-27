@@ -18,6 +18,5 @@ const questionSchema = new mongoose.Schema({
   ]
 });
 
-// Force the model to use the exact collection name from your screenshot
-// Based on image 2, the collection name is "questionsbycategories"
+
 export default mongoose.model("Question", questionSchema, "questionsbycategories");

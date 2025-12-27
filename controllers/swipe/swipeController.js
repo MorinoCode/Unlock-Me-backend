@@ -1,5 +1,3 @@
-// controllers/swipe/swipeController.js
-
 import User from "../../models/User.js";
 import { calculateCompatibility, calculateUserDNA } from "../../utils/matchUtils.js";
 
@@ -11,8 +9,8 @@ export const getSwipeCards = async (req, res) => {
     if (!me) return res.status(404).json({ message: "User not found" });
 
     // ✅ چک کردن اینکه کاربر خودش کشور را ست کرده باشد
-    const myCountry = me.location?.country;
-    if (!myCountry) {
+    const myCountry = me.location?. country;
+    if (! myCountry) {
         return res.status(400).json({ 
             message: "Please set your location (Country) in profile settings first." 
         });
@@ -29,13 +27,11 @@ export const getSwipeCards = async (req, res) => {
     // ✅ ساخت کوئری با فیلتر دقیق کشور
     let query = {
       _id: { $nin: excludeIds },
-      // استفاده از Regex برای اینکه حروف بزرگ/کوچک (Iran vs iran) مشکل‌ساز نشود
       "location.country": { $regex: new RegExp(`^${myCountry}$`, "i") }
     };
 
     // اعمال فیلتر جنسیت (Looking For)
     if (me.lookingFor && me.lookingFor !== 'all') {
-       // مثلاً اگر من دنبال Female هستم، جنسیت کارت‌ها باید Female باشد
       query.gender = { $regex: new RegExp(`^${me.lookingFor}$`, "i") };
     }
 
@@ -46,36 +42,31 @@ export const getSwipeCards = async (req, res) => {
     ]);
 
     // پردازش دیتا برای فرانت
-    const enrichedCards = candidates.map(user => {
+    const enrichedCards = candidates. map(user => {
       const compatibility = calculateCompatibility(me, user);
       const dnaProfile = calculateUserDNA(user);
 
-      // Icebreaker logic
+      // Icebreaker logic — common interest یا fallback to bio
       const commonInterest = user.interests?.find(i => me.interests?.includes(i));
       const icebreakerHint = commonInterest 
-        ? `Ask about ${commonInterest}!` 
-        : `Ask about their bio...`;
+        ?  `I noticed we both love ${commonInterest}! Tell me, what got you into it?` 
+        : `Your bio caught my attention. ${user.bio?. substring(0, 50) || "Let's chat! "}`;
 
       return {
         _id: user._id,
         name: user.name,
-        // محاسبه سن
         age: user.birthday?.year ? (new Date().getFullYear() - parseInt(user.birthday.year)) : 25,
-        avatar: user.avatar,
+        avatar:  user.avatar,
         gallery: user.gallery || [],
         bio: user.bio,
         gender: user.gender,
-        location: user.location, // شامل شهر و کشور
-        
-        // ✅ ارسال وضعیت ویس:
-        // اگر خالی باشد فرانت دکمه را Disable می‌کند، اگر پر باشد لینک را پخش می‌کند
+        location: user.location,
         voiceIntro: user.voiceIntro || null, 
 
         matchScore: compatibility,   
         dna: dnaProfile,             
         icebreaker: icebreakerHint,  
         
-        // لاجیک Upsell: اگر امتیاز بالای ۹۰ بود، به عنوان کاندیدای پریمیوم علامت بزن
         isPremiumCandidate: compatibility >= 90, 
       };
     });
@@ -84,7 +75,7 @@ export const getSwipeCards = async (req, res) => {
 
   } catch (error) {
     console.error("Swipe Cards Error:", error);
-    res.status(500).json({ message: "Server error", error: error.message });
+    res.status(500).json({ message: "Server error", error: error. message });
   }
 };
 
@@ -108,9 +99,9 @@ export const handleSwipeAction = async (req, res) => {
     }
     else if (action === 'right') { // Like
       await User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { likedUsers: targetUserId }
+        $addToSet: { likedUsers:  targetUserId }
       });
-      const isLikedBack = targetUser.likedUsers.includes(currentUserId) || targetUser.superLikedUsers.includes(currentUserId);
+      const isLikedBack = (targetUser.likedUsers || []).includes(currentUserId) || (targetUser.superLikedUsers || []).includes(currentUserId);
       if (isLikedBack) isMatch = true;
     }
     else if (action === 'up') { // Super Like
@@ -118,9 +109,9 @@ export const handleSwipeAction = async (req, res) => {
         $addToSet: { superLikedUsers: targetUserId }
       });
       await User.findByIdAndUpdate(targetUserId, {
-        $addToSet: { superLikedBy: currentUserId } 
+        $addToSet:  { superLikedBy: currentUserId } 
       });
-      const isLikedBack = targetUser.likedUsers.includes(currentUserId) || targetUser.superLikedUsers.includes(currentUserId);
+      const isLikedBack = (targetUser.likedUsers || []).includes(currentUserId) || (targetUser.superLikedUsers || []).includes(currentUserId);
       if (isLikedBack) isMatch = true;
     }
 

@@ -1,5 +1,5 @@
 import User from "../../models/User.js";
-import { calculateCompatibility, calculateUserDNA } from "../../utils/matchUtils.js";
+import { calculateCompatibility, calculateUserDNA, getUserVisibilityThreshold, shuffleArray } from "../../utils/matchUtils.js";
 
 // export const getExploreMatches = async (req, res) => {
 //   try {
@@ -157,27 +157,7 @@ export const getUserLocation = async (req, res) => {
 
 
 
-const getUserVisibilityThreshold = (plan) => {
-  const normalizedPlan = plan?.toLowerCase() || "free";
-  switch (normalizedPlan) {
-    case "platinum":
-    case "premium":
-      return 100;
-    case "gold":
-      return 90;
-    case "free":
-    default:
-      return 80;
-  }
-};
 
-const shuffleArray = (array) => {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-};
 
 export const getExploreMatches = async (req, res) => {
   try {
@@ -304,49 +284,7 @@ export const getExploreMatches = async (req, res) => {
   }
 };
 
-export const getMatchesDashboard = async (req, res) => {
-  try {
-    const { type, page = 1, limit = 20 } = req.query;
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
 
-    const user = await User.findById(req.user._id)
-      .populate("likedUsers", "name avatar location birthday bio matchScore subscription isVerified")
-      .populate("likedBy", "name avatar location birthday bio matchScore subscription isVerified");
-
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    if (type) {
-      let targetList = [];
-      const likedUsersIds = user.likedUsers.map(u => u._id.toString());
-      const likedByIds = user.likedBy.map(u => u._id.toString());
-
-      if (type === 'mutual') {
-        targetList = user.likedUsers.filter(u => likedByIds.includes(u._id.toString()));
-      } else if (type === 'incoming') {
-        targetList = user.likedBy.filter(u => !likedUsersIds.includes(u._id.toString()));
-      } else if (type === 'sent') {
-        targetList = user.likedUsers.filter(u => !likedByIds.includes(u._id.toString()));
-      }
-
-      const totalUsers = targetList.length;
-      const totalPages = Math.ceil(totalUsers / limitNum);
-      const paginatedUsers = targetList.slice((pageNum - 1) * limitNum, pageNum * limitNum);
-
-      return res.status(200).json({
-        users: paginatedUsers,
-        pagination: { currentPage: pageNum, totalPages, totalUsers }
-      });
-    } 
-    
-    else {
-       return res.status(400).json({ message: "Type is required" });
-    }
-
-  } catch (error) {
-    res.status(500).json({ message: "Server error", error: error.message });
-  }
-};
 
 export const getUserDetails = async (req, res) => {
   try {

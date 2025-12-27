@@ -10,6 +10,7 @@ import userRoutes from "./routes/userRoutes.js";
 import userOnboardingRoutes from "./routes/userOnboardingRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import exploreRoutes from "./routes/exploreRoutes.js"
+import matchesRoutes from "./routes/matchesRoutes.js"
 
 dotenv.config();
 const app = express();
@@ -62,6 +63,7 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/user/onboarding", userOnboardingRoutes);
+app.use("/api/user/matches", matchesRoutes);
 app.use("/api/explore", exploreRoutes);
 
 mongoose

@@ -29,10 +29,7 @@ const TRAIT_MAPPING = {
   "Structured": "Discipline"
 };
 
-/**
- * --- 2. Calculate DNA Score ---
- * پاسخ‌های کاربر را می‌گیرد و یک پروفایل 5 محوره می‌سازد.
- */
+
 export const calculateUserDNA = (user) => {
   // مقادیر اولیه
   const dna = { Logic: 0, Emotion: 0, Energy: 0, Creativity: 0, Discipline: 0 };
@@ -83,10 +80,6 @@ export const calculateUserDNA = (user) => {
   return dna;
 };
 
-/**
- * --- 3. The Match Algorithm ---
- * مقایسه دو کاربر بر اساس DNA و فاکتورهای پایه
- */
 export const calculateCompatibility = (me, other) => {
   if (!me || !other) return 0;
 
@@ -129,4 +122,25 @@ export const calculateCompatibility = (me, other) => {
   const finalScore = Math.round(weightedDnaScore + baseScore);
 
   return Math.min(Math.max(finalScore, 0), 100);
+};
+export const getUserVisibilityThreshold = (plan) => {
+  const normalizedPlan = plan?.toLowerCase() || "free";
+  switch (normalizedPlan) {
+    case "platinum":
+    case "premium":
+      return 100;
+    case "gold":
+      return 90;
+    case "free":
+    default:
+      return 80;
+  }
+};
+
+export const shuffleArray = (array) => {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
 };

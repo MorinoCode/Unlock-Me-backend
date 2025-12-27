@@ -1,0 +1,141 @@
+// controllers/swipe/swipeController.js
+
+import User from "../../models/User.js";
+import { calculateCompatibility, calculateUserDNA } from "../../utils/matchUtils.js";
+
+export const getSwipeCards = async (req, res) => {
+  try {
+    const currentUserId = req.user._id || req.user.userId;
+    
+    const me = await User.findById(currentUserId);
+    if (!me) return res.status(404).json({ message: "User not found" });
+
+    // ✅ چک کردن اینکه کاربر خودش کشور را ست کرده باشد
+    const myCountry = me.location?.country;
+    if (!myCountry) {
+        return res.status(400).json({ 
+            message: "Please set your location (Country) in profile settings first." 
+        });
+    }
+
+    // لیست سیاه (تکراری‌ها + خودم)
+    const excludeIds = [
+      currentUserId,
+      ...(me.likedUsers || []),
+      ...(me.dislikedUsers || []),
+      ...(me.superLikedUsers || [])
+    ];
+
+    // ✅ ساخت کوئری با فیلتر دقیق کشور
+    let query = {
+      _id: { $nin: excludeIds },
+      // استفاده از Regex برای اینکه حروف بزرگ/کوچک (Iran vs iran) مشکل‌ساز نشود
+      "location.country": { $regex: new RegExp(`^${myCountry}$`, "i") }
+    };
+
+    // اعمال فیلتر جنسیت (Looking For)
+    if (me.lookingFor && me.lookingFor !== 'all') {
+       // مثلاً اگر من دنبال Female هستم، جنسیت کارت‌ها باید Female باشد
+      query.gender = { $regex: new RegExp(`^${me.lookingFor}$`, "i") };
+    }
+
+    // دریافت ۲۰ نفر به صورت رندوم
+    const candidates = await User.aggregate([
+      { $match: query },
+      { $sample: { size: 20 } } 
+    ]);
+
+    // پردازش دیتا برای فرانت
+    const enrichedCards = candidates.map(user => {
+      const compatibility = calculateCompatibility(me, user);
+      const dnaProfile = calculateUserDNA(user);
+
+      // Icebreaker logic
+      const commonInterest = user.interests?.find(i => me.interests?.includes(i));
+      const icebreakerHint = commonInterest 
+        ? `Ask about ${commonInterest}!` 
+        : `Ask about their bio...`;
+
+      return {
+        _id: user._id,
+        name: user.name,
+        // محاسبه سن
+        age: user.birthday?.year ? (new Date().getFullYear() - parseInt(user.birthday.year)) : 25,
+        avatar: user.avatar,
+        gallery: user.gallery || [],
+        bio: user.bio,
+        gender: user.gender,
+        location: user.location, // شامل شهر و کشور
+        
+        // ✅ ارسال وضعیت ویس:
+        // اگر خالی باشد فرانت دکمه را Disable می‌کند، اگر پر باشد لینک را پخش می‌کند
+        voiceIntro: user.voiceIntro || null, 
+
+        matchScore: compatibility,   
+        dna: dnaProfile,             
+        icebreaker: icebreakerHint,  
+        
+        // لاجیک Upsell: اگر امتیاز بالای ۹۰ بود، به عنوان کاندیدای پریمیوم علامت بزن
+        isPremiumCandidate: compatibility >= 90, 
+      };
+    });
+
+    res.status(200).json(enrichedCards);
+
+  } catch (error) {
+    console.error("Swipe Cards Error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+export const handleSwipeAction = async (req, res) => {
+  try {
+    const currentUserId = req.user._id || req.user.userId;
+    const { targetUserId, action } = req.body; 
+
+    if (!targetUserId || !action) return res.status(400).json({ message: "Invalid data" });
+
+    const targetUser = await User.findById(targetUserId);
+
+    if (!targetUser) return res.status(404).json({ message: "Target user not found" });
+
+    let isMatch = false;
+
+    if (action === 'left') { // Pass
+      await User.findByIdAndUpdate(currentUserId, {
+        $addToSet: { dislikedUsers: targetUserId }
+      });
+    }
+    else if (action === 'right') { // Like
+      await User.findByIdAndUpdate(currentUserId, {
+        $addToSet: { likedUsers: targetUserId }
+      });
+      const isLikedBack = targetUser.likedUsers.includes(currentUserId) || targetUser.superLikedUsers.includes(currentUserId);
+      if (isLikedBack) isMatch = true;
+    }
+    else if (action === 'up') { // Super Like
+      await User.findByIdAndUpdate(currentUserId, {
+        $addToSet: { superLikedUsers: targetUserId }
+      });
+      await User.findByIdAndUpdate(targetUserId, {
+        $addToSet: { superLikedBy: currentUserId } 
+      });
+      const isLikedBack = targetUser.likedUsers.includes(currentUserId) || targetUser.superLikedUsers.includes(currentUserId);
+      if (isLikedBack) isMatch = true;
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      isMatch, 
+      matchDetails: isMatch ? {
+        name: targetUser.name,
+        avatar: targetUser.avatar,
+        id: targetUser._id
+      } : null
+    });
+
+  } catch (error) {
+    console.error("Swipe Action Error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};

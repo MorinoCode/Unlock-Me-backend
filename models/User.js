@@ -60,6 +60,19 @@ const userSchema = new mongoose.Schema(
       },
     ],
 
+    superLikedUsers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    superLikedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+
     interests: [String],
     avatar: { type: String, default: "" },
 
@@ -78,12 +91,12 @@ const userSchema = new mongoose.Schema(
       },
     },
     phone: { type: String, default: "" },
-    detailedAddress: { type: String, default: "" }, // برای اینکه با city/country تداخل نکند
+    detailedAddress: { type: String, default: "" },
     gallery: {
       type: [String],
-      validate: [arrayLimit, '{PATH} exceeds the limit of 6'] // محدودیت ۶ عکس
+      validate: [arrayLimit, "{PATH} exceeds the limit of 6"],
     },
-    
+    voiceIntro: { type: String, default: "" },
   },
   { timestamps: true }
 );

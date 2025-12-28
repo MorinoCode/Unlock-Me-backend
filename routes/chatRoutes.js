@@ -1,6 +1,7 @@
 import express from "express";
 import { sendMessage, getMessages, getConversations, markAsRead, editMessage, deleteMessage, reactToMessage } from "../controllers/chatController/chatController.js";
 import { protect } from "../middleware/auth.js"; 
+import { generateIcebreakers } from "../controllers/chatController/aiWingmanController.js";
 
 const router = express.Router();
 
@@ -11,5 +12,6 @@ router.put("/read/:otherUserId", protect, markAsRead)
 router.put("/edit/:id", protect, editMessage);
 router.delete("/delete/:id", protect, deleteMessage);
 router.post("/react/:id", protect, reactToMessage)
+router.post("/spark", protect, generateIcebreakers);
 
 export default router;

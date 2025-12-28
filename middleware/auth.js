@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import User from "../models/User.js";
 
 export const protect = (req, res, next) => {
   const token = req.cookies["unlock-me-token"]; 
@@ -15,4 +16,18 @@ export const protect = (req, res, next) => {
   } catch (err) {
     return res.status(401).json({ message: "Token is not valid" ,err});
   }
+};
+
+export const optionalProtect = async (req, res, next) => {
+   const token = req.cookies["unlock-me-token"]; 
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = await User.findById(decoded.userId).select('-password');
+    } catch (error) {
+      console.log(error)
+      req.user = null;
+    }
+  }
+  next();
 };

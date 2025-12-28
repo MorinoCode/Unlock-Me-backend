@@ -13,6 +13,7 @@ import exploreRoutes from "./routes/exploreRoutes.js"
 import matchesRoutes from "./routes/matchesRoutes.js"
 import swipeRoutes from "./routes/swipeRoutes.js"
 import locationRoutes from "./routes/locationRoutes.js"
+import reportRoutes from "./routes/reportRoutes.js"
 
 dotenv.config();
 const app = express();
@@ -68,6 +69,7 @@ app.use("/api/user/matches", matchesRoutes);
 app.use("/api/explore", exploreRoutes);
 app.use("/api/swipe", swipeRoutes);
 app.use("/api/locations", locationRoutes);
+app.use('/api/reports', reportRoutes);
 
 mongoose
   .connect(process.env.MONGO_URI)

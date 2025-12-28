@@ -1,5 +1,9 @@
 import User from "../../models/User.js";
-import { calculateCompatibility, calculateUserDNA } from "../../utils/matchUtils.js";
+import { 
+  calculateCompatibility, 
+  calculateUserDNA, 
+  generateMatchInsights 
+} from "../../utils/matchUtils.js";
 
 export const getSwipeCards = async (req, res) => {
   try {
@@ -8,15 +12,13 @@ export const getSwipeCards = async (req, res) => {
     const me = await User.findById(currentUserId);
     if (!me) return res.status(404).json({ message: "User not found" });
 
-    // ✅ چک کردن اینکه کاربر خودش کشور را ست کرده باشد
-    const myCountry = me.location?. country;
-    if (! myCountry) {
+    const myCountry = me.location?.country;
+    if (!myCountry) {
         return res.status(400).json({ 
             message: "Please set your location (Country) in profile settings first." 
         });
     }
 
-    // لیست سیاه (تکراری‌ها + خودم)
     const excludeIds = [
       currentUserId,
       ...(me.likedUsers || []),
@@ -24,39 +26,35 @@ export const getSwipeCards = async (req, res) => {
       ...(me.superLikedUsers || [])
     ];
 
-    // ✅ ساخت کوئری با فیلتر دقیق کشور
     let query = {
       _id: { $nin: excludeIds },
       "location.country": { $regex: new RegExp(`^${myCountry}$`, "i") }
     };
 
-    // اعمال فیلتر جنسیت (Looking For)
     if (me.lookingFor && me.lookingFor !== 'all') {
       query.gender = { $regex: new RegExp(`^${me.lookingFor}$`, "i") };
     }
 
-    // دریافت ۲۰ نفر به صورت رندوم
     const candidates = await User.aggregate([
       { $match: query },
       { $sample: { size: 20 } } 
     ]);
 
-    // پردازش دیتا برای فرانت
-    const enrichedCards = candidates. map(user => {
+    const enrichedCards = candidates.map(user => {
       const compatibility = calculateCompatibility(me, user);
       const dnaProfile = calculateUserDNA(user);
+      const insights = generateMatchInsights(me, user);
 
-      // Icebreaker logic — common interest یا fallback to bio
       const commonInterest = user.interests?.find(i => me.interests?.includes(i));
       const icebreakerHint = commonInterest 
-        ?  `I noticed we both love ${commonInterest}! Tell me, what got you into it?` 
-        : `Your bio caught my attention. ${user.bio?. substring(0, 50) || "Let's chat! "}`;
+        ? `I noticed we both love ${commonInterest}! Tell me, what got you into it?` 
+        : `Your bio caught my attention. ${user.bio?.substring(0, 50) || "Let's chat!"}`;
 
       return {
         _id: user._id,
         name: user.name,
         age: user.birthday?.year ? (new Date().getFullYear() - parseInt(user.birthday.year)) : 25,
-        avatar:  user.avatar,
+        avatar: user.avatar,
         gallery: user.gallery || [],
         bio: user.bio,
         gender: user.gender,
@@ -65,6 +63,7 @@ export const getSwipeCards = async (req, res) => {
 
         matchScore: compatibility,   
         dna: dnaProfile,             
+        insights: insights,
         icebreaker: icebreakerHint,  
         
         isPremiumCandidate: compatibility >= 90, 
@@ -75,7 +74,7 @@ export const getSwipeCards = async (req, res) => {
 
   } catch (error) {
     console.error("Swipe Cards Error:", error);
-    res.status(500).json({ message: "Server error", error: error. message });
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -92,24 +91,24 @@ export const handleSwipeAction = async (req, res) => {
 
     let isMatch = false;
 
-    if (action === 'left') { // Pass
+    if (action === 'left') { 
       await User.findByIdAndUpdate(currentUserId, {
         $addToSet: { dislikedUsers: targetUserId }
       });
     }
-    else if (action === 'right') { // Like
+    else if (action === 'right') { 
       await User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { likedUsers:  targetUserId }
+        $addToSet: { likedUsers: targetUserId }
       });
       const isLikedBack = (targetUser.likedUsers || []).includes(currentUserId) || (targetUser.superLikedUsers || []).includes(currentUserId);
       if (isLikedBack) isMatch = true;
     }
-    else if (action === 'up') { // Super Like
+    else if (action === 'up') { 
       await User.findByIdAndUpdate(currentUserId, {
         $addToSet: { superLikedUsers: targetUserId }
       });
       await User.findByIdAndUpdate(targetUserId, {
-        $addToSet:  { superLikedBy: currentUserId } 
+        $addToSet: { superLikedBy: currentUserId } 
       });
       const isLikedBack = (targetUser.likedUsers || []).includes(currentUserId) || (targetUser.superLikedUsers || []).includes(currentUserId);
       if (isLikedBack) isMatch = true;

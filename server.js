@@ -14,6 +14,7 @@ import matchesRoutes from "./routes/matchesRoutes.js"
 import swipeRoutes from "./routes/swipeRoutes.js"
 import locationRoutes from "./routes/locationRoutes.js"
 import reportRoutes from "./routes/reportRoutes.js"
+import { addToQueue } from "./utils/blindDateService.js.js";
 
 dotenv.config();
 const app = express();
@@ -55,6 +56,23 @@ io.on("connection", (socket) => {
 
   socket.on("stop_typing", ({ receiverId }) => {
     io.to(receiverId).emit("hide_typing");
+  });
+  socket.on('join_blind_queue', async (data) => {
+    const result = await addToQueue(socket.userId, data.criteria);
+    
+    if (result.participants) {
+      // مچ پیدا شد! هر دو را به یک اتاق وصل کن
+      const roomId = `blind_${result._id}`;
+      socket.join(roomId);
+      io.to(result.participants[0]).emit('match_found', result);
+      io.to(result.participants[1]).emit('match_found', result);
+    }
+  });
+
+  socket.on('submit_blind_answer', async (data) => {
+    // صدا کردن تابع submitAnswer از کنترلر و فرستادن فیدبک لحظه‌ای
+    // اگر هر دو جواب دادند:
+    io.to(`blind_${data.sessionId}`).emit('reveal_answers', data);
   });
 
   socket.on("disconnect", () => {});

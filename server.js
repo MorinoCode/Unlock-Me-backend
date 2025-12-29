@@ -14,6 +14,7 @@ import matchesRoutes from "./routes/matchesRoutes.js";
 import swipeRoutes from "./routes/swipeRoutes.js";
 import locationRoutes from "./routes/locationRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
+import postRoutes from "./routes/postRoutes.js";
 import { addToQueue } from "./utils/blindDateService.js.js";
 import BlindSession from "./models/BlindSession.js";
 import BlindQuestion from "./models/BlindQuestion.js";
@@ -302,6 +303,9 @@ app.use("/api/explore", exploreRoutes);
 app.use("/api/swipe", swipeRoutes);
 app.use("/api/locations", locationRoutes);
 app.use("/api/reports", reportRoutes);
+app.use('/api/posts', postRoutes);
+
+
 
 mongoose
   .connect(process.env.MONGO_URI)

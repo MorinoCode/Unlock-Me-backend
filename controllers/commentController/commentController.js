@@ -51,3 +51,31 @@ export const getPostComments = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+export const deleteComment = async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    const userId = req.user.userId;
+    console.log(userId);
+
+    const comment = await Comment.findById(commentId).populate('post');
+
+    if (!comment) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
+
+    // بررسی دسترسی: نویسنده کامنت یا صاحب پست
+    const isCommentAuthor = comment.author.toString() === userId.toString();
+    const isPostOwner = comment.post.author.toString() === userId.toString();
+
+    if (!isCommentAuthor && !isPostOwner) {
+      return res.status(403).json({ message: "Not authorized to delete this comment" });
+    }
+
+    await comment.deleteOne();
+    res.status(200).json({ message: "Comment deleted successfully" });
+  } catch (error) {
+    console.error("Delete Comment Error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};

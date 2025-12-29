@@ -150,7 +150,7 @@ export const deletePost = async (req, res) => {
         console.log("Image deleted from Cloudinary:", fullPublicId);
       } catch (cloudinaryErr) {
         console.error("Cloudinary Delete Error:", cloudinaryErr);
-        // حتی اگر از کلودیناری پاک نشد، روند حذف از دیتابیس را ادامه می‌دهیم
+        // حتی اگر از کلودیناری پاک نشد، روند حذف از دیتابیس را ادامه می‌دهی
       }
     }
 

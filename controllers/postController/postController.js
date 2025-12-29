@@ -117,49 +117,49 @@ export const getMyPosts = async (req, res) => {
   }
 };
 
-// ✅ حذف پست (هماهنگ سازی آیدی‌ها)
 export const deletePost = async (req, res) => {
   try {
     const { postId } = req.params;
+    
+    // پیدا کردن پست قبل از حذف برای دسترسی به آدرس عکس
     const post = await Post.findById(postId);
 
     if (!post) {
       return res.status(404).json({ message: "Post not found" });
     }
 
-    // بررسی اجازه دسترسی (صاحب پست)
-    if (post.author.toString() !== req.user.userId.toString()) {
-      return res.status(403).json({ message: "Unauthorized to delete this post" });
+    // بررسی اجازه حذف (فقط صاحب پست)
+    const currentUserId = req.user.userId;
+    if (post.author.toString() !== currentUserId.toString()) {
+      return res.status(403).json({ message: "You are not authorized to delete this post" });
     }
 
     // --- بخش حذف از Cloudinary ---
     if (post.image) {
       try {
-        // استخراج Public ID از URL
-        // مثال URL: https://res.cloudinary.com/demo/image/upload/v1234/folder/image_name.jpg
-        // ما بخش folder/image_name را نیاز داریم
+        // مطابق تنظیمات شما، فایل‌ها در پوشه 'unlock_me_posts' هستند
+        // ما باید Public ID را از انتهای URL استخراج کنیم
         const urlParts = post.image.split('/');
-        const fileNameWithExtension = urlParts[urlParts.length - 1]; // image_name.jpg
-        const publicIdWithoutExtension = fileNameWithExtension.split('.')[0]; // image_name
+        const fileNameWithExtension = urlParts[urlParts.length - 1]; // مثال: abc123.jpg
+        const publicIdWithoutExtension = fileNameWithExtension.split('.')[0]; // مثال: abc123
         
-        // اگر پوشه‌بندی دارید (مثلاً folder/image_name):
-        const folderName = urlParts[urlParts.length - 2];
-        const fullPublicId = folderName === 'upload' ? publicIdWithoutExtension : `${folderName}/${publicIdWithoutExtension}`;
+        // ترکیب نام پوشه و آیدی فایل
+        const fullPublicId = `unlock_me_posts/${publicIdWithoutExtension}`;
 
-        await cloudinary.uploader.destroy(fullPublicId);
-        console.log("Image deleted from Cloudinary:", fullPublicId);
+        const result = await cloudinary.uploader.destroy(fullPublicId);
+        console.log("Cloudinary Delete Result:", result);
       } catch (cloudinaryErr) {
-        console.error("Cloudinary Delete Error:", cloudinaryErr);
-        // حتی اگر از کلودیناری پاک نشد، روند حذف از دیتابیس را ادامه می‌دهی
+        console.error("Cloudinary Deletion Failed:", cloudinaryErr);
+        // اگر در حذف از کلودیناری خطایی رخ داد، باز هم اجازه می‌دهیم پست از دیتابیس پاک شود
       }
     }
 
     // --- حذف از دیتابیس ---
     await post.deleteOne();
 
-    res.status(200).json({ message: "Post and image deleted successfully" });
+    res.status(200).json({ message: "Post and cloud image deleted successfully" });
   } catch (error) {
     console.error("Delete Controller Error:", error);
-    res.status(500).json({ message: "Server error during deletion" });
+    res.status(500).json({ message: "Internal server error", error: error.message });
   }
 };

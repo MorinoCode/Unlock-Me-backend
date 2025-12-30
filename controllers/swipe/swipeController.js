@@ -4,6 +4,7 @@ import {
   calculateUserDNA, 
   generateMatchInsights 
 } from "../../utils/matchUtils.js";
+import { emitNotification } from "../../utils/notificationHelper.js";
 
 export const getSwipeCards = async (req, res) => {
   try {
@@ -82,38 +83,80 @@ export const handleSwipeAction = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.userId;
     const { targetUserId, action } = req.body; 
+    const io = req.app.get("io");
 
-    if (!targetUserId || !action) return res.status(400).json({ message: "Invalid data" });
+    // 1. Validation
+    if (!targetUserId || !action) {
+      return res.status(400).json({ message: "Invalid data: targetUserId and action are required." });
+    }
 
     const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ message: "Target user not found" });
+    }
 
-    if (!targetUser) return res.status(404).json({ message: "Target user not found" });
+    const currentUserData = await User.findById(currentUserId);
+    if (!currentUserData) {
+      return res.status(404).json({ message: "Current user not found" });
+    }
 
     let isMatch = false;
 
+    // 2. Processing Actions
     if (action === 'left') { 
+      // Dislike logic
       await User.findByIdAndUpdate(currentUserId, {
         $addToSet: { dislikedUsers: targetUserId }
       });
-    }
-    else if (action === 'right') { 
+    } 
+    else if (action === 'right' || action === 'up') {
+      // Like or SuperLike logic
+      const updateField = action === 'right' ? 'likedUsers' : 'superLikedUsers';
+      
       await User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { likedUsers: targetUserId }
+        $addToSet: { [updateField]: targetUserId }
       });
-      const isLikedBack = (targetUser.likedUsers || []).includes(currentUserId) || (targetUser.superLikedUsers || []).includes(currentUserId);
-      if (isLikedBack) isMatch = true;
-    }
-    else if (action === 'up') { 
-      await User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { superLikedUsers: targetUserId }
-      });
-      await User.findByIdAndUpdate(targetUserId, {
-        $addToSet: { superLikedBy: currentUserId } 
-      });
-      const isLikedBack = (targetUser.likedUsers || []).includes(currentUserId) || (targetUser.superLikedUsers || []).includes(currentUserId);
-      if (isLikedBack) isMatch = true;
+
+      // If it's a SuperLike, we also update the receiver's superLikedBy list
+      if (action === 'up') {
+        await User.findByIdAndUpdate(targetUserId, {
+          $addToSet: { superLikedBy: currentUserId }
+        });
+      }
+
+      // 3. Match Detection
+      // Check if the target user has already liked or superliked the current user
+      const hasLikedMe = (targetUser.likedUsers || []).includes(currentUserId.toString()) || 
+                         (targetUser.superLikedUsers || []).includes(currentUserId.toString());
+
+      if (hasLikedMe) {
+        isMatch = true;
+
+        // 4. Send Notifications for Match (Persistent & Real-time)
+        
+        // Notification to the Target User (the person who was swiped on)
+        await emitNotification(io, targetUserId, {
+          type: "MATCH",
+          senderId: currentUserId,
+          senderName: currentUserData.name,
+          senderAvatar: currentUserData.avatar,
+          message: "It's a Match! You both liked each other ❤️",
+          targetId: currentUserId.toString() // Clicking leads to current user profile/chat
+        });
+
+        // Notification to the Current User (the person swiping)
+        await emitNotification(io, currentUserId, {
+          type: "MATCH",
+          senderId: targetUserId,
+          senderName: targetUser.name,
+          senderAvatar: targetUser.avatar,
+          message: "Congratulations! You have a new match 🔥",
+          targetId: targetUserId.toString() // Clicking leads to target user profile/chat
+        });
+      }
     }
 
+    // 5. Final Response
     res.status(200).json({ 
       success: true, 
       isMatch, 
@@ -125,7 +168,7 @@ export const handleSwipeAction = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Swipe Action Error:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Error in handleSwipeAction:", error);
+    res.status(500).json({ message: "Internal server error during swipe action." });
   }
 };

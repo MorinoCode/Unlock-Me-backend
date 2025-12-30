@@ -1,8 +1,7 @@
 import Conversation from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
 import sanitizeHtml from 'sanitize-html';
-
-
+import { emitNotification } from '../../utils/notificationHelper.js';
 
 export const sendMessage = async (req, res) => {
   try {
@@ -47,7 +46,17 @@ export const sendMessage = async (req, res) => {
     
     await conversation.save();
 
+    // Emit standard chat event (existing logic)
     io.to(receiverId).emit("receive_message", newMessage);
+
+    // Emit Real-time Notification for New Message
+    emitNotification(io, receiverId, {
+      type: "NEW_MESSAGE",
+      senderName: req.user.name || "A user",
+      senderAvatar: req.user.avatar,
+      message: cleanText ? (cleanText.length > 40 ? cleanText.substring(0, 40) + "..." : cleanText) : "Sent a file",
+      targetId: senderId // Clicking notification leads to chat with sender
+    });
 
     res.status(201).json(newMessage);
   } catch (error) {

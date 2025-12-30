@@ -1,13 +1,16 @@
 import Comment from '../../models/Comment.js';
 import Post from '../../models/Post.js';
 import User from '../../models/User.js';
+import { emitNotification } from '../../utils/notificationHelper.js';
 
 export const addComment = async (req, res) => {
   try {
     const { postId } = req.params;
     const { content } = req.body;
-    const userId = await User.findById(req.user.userId).select('-password');
-    if (!req.user) {
+    const io = req.app.get("io");
+    
+    const user = await User.findById(req.user.userId).select('-password');
+    if (!user) {
       return res.status(401).json({ message: "User not authenticated" });
     }
 
@@ -22,15 +25,26 @@ export const addComment = async (req, res) => {
 
     const newComment = new Comment({
       content,
-      author: userId,
+      author: user._id,
       post: postId
     });
 
     const savedComment = await newComment.save();
 
-    // پاپولیت کردن نویسنده برای نمایش بلافاصله در فرانت‌اِند
+    // Populate author for immediate UI display
     const populatedComment = await Comment.findById(savedComment._id)
       .populate('author', 'name avatar');
+
+    // Notify post author about the new comment
+    if (post.author.toString() !== user._id.toString()) {
+      emitNotification(io, post.author, {
+        type: "NEW_COMMENT",
+        senderName: user.name,
+        senderAvatar: user.avatar,
+        message: `commented: "${content.substring(0, 30)}..."`,
+        targetId: postId // Clicking leads to the post
+      });
+    }
 
     res.status(201).json(populatedComment);
   } catch (error) {
@@ -43,7 +57,7 @@ export const getPostComments = async (req, res) => {
   try {
     const { postId } = req.params;
     const comments = await Comment.find({ post: postId })
-      .sort({ createdAt: 1 }) // قدیمی به جدید
+      .sort({ createdAt: 1 }) 
       .populate('author', 'name avatar');
     
     res.status(200).json(comments);
@@ -56,7 +70,6 @@ export const deleteComment = async (req, res) => {
   try {
     const { commentId } = req.params;
     const userId = req.user.userId;
-    console.log(userId);
 
     const comment = await Comment.findById(commentId).populate('post');
 
@@ -64,7 +77,6 @@ export const deleteComment = async (req, res) => {
       return res.status(404).json({ message: "Comment not found" });
     }
 
-    // بررسی دسترسی: نویسنده کامنت یا صاحب پست
     const isCommentAuthor = comment.author.toString() === userId.toString();
     const isPostOwner = comment.post.author.toString() === userId.toString();
 

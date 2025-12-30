@@ -69,10 +69,12 @@ export const sendStageMessage = async (req, res) => {
     session.messages.push({ sender: userId, text });
     await session.save();
 
-    // Notify partner about the new blind message
     const partnerId = session.participants.find(p => p.toString() !== userId.toString());
-    emitNotification(io, partnerId, {
+    
+    // آپدیت شده: اضافه شدن senderId برای نویگیشن
+    await emitNotification(io, partnerId, {
       type: "BLIND_MESSAGE",
+      senderId: userId, 
       senderName: "Anonymous",
       message: "Sent you a message in Blind Date 🕵️",
       targetId: sessionId
@@ -83,7 +85,6 @@ export const sendStageMessage = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
 export const proceedToNextStage = async (req, res) => {
   try {
     const { sessionId } = req.body;
@@ -143,10 +144,11 @@ export const handleRevealDecision = async (req, res) => {
     if (session.revealDecision.u1Reveal && session.revealDecision.u2Reveal) {
       session.status = 'completed';
       
-      // Notify both participants that they matched and revealed
-      session.participants.forEach(pId => {
-        emitNotification(io, pId, {
+      session.participants.forEach(async (pId) => {
+        // آپدیت شده: اضافه شدن senderId (سیستم)
+        await emitNotification(io, pId, {
           type: "REVEAL_SUCCESS",
+          senderId: userId, // فرستنده ایونت
           senderName: "System",
           message: "Congratulations! You both decided to reveal. It's a Match! 🔓",
           targetId: sessionId

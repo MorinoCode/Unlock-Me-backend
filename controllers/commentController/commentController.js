@@ -10,18 +10,14 @@ export const addComment = async (req, res) => {
     const io = req.app.get("io");
     
     const user = await User.findById(req.user.userId).select('-password');
-    if (!user) {
-      return res.status(401).json({ message: "User not authenticated" });
-    }
+    if (!user) return res.status(401).json({ message: "User not authenticated" });
 
     if (!content || content.trim() === "") {
       return res.status(400).json({ message: "Comment content is required" });
     }
 
     const post = await Post.findById(postId);
-    if (!post) {
-      return res.status(404).json({ message: "Post not found" });
-    }
+    if (!post) return res.status(404).json({ message: "Post not found" });
 
     const newComment = new Comment({
       content,
@@ -30,25 +26,22 @@ export const addComment = async (req, res) => {
     });
 
     const savedComment = await newComment.save();
+    const populatedComment = await Comment.findById(savedComment._id).populate('author', 'name avatar');
 
-    // Populate author for immediate UI display
-    const populatedComment = await Comment.findById(savedComment._id)
-      .populate('author', 'name avatar');
-
-    // Notify post author about the new comment
     if (post.author.toString() !== user._id.toString()) {
-      emitNotification(io, post.author, {
+      // آپدیت شده: اضافه شدن senderId
+      await emitNotification(io, post.author, {
         type: "NEW_COMMENT",
+        senderId: user._id, // هدایت به پروفایل کامنت‌گذار
         senderName: user.name,
         senderAvatar: user.avatar,
         message: `commented: "${content.substring(0, 30)}..."`,
-        targetId: postId // Clicking leads to the post
+        targetId: postId 
       });
     }
 
     res.status(201).json(populatedComment);
   } catch (error) {
-    console.error("Add Comment Error:", error);
     res.status(500).json({ message: error.message });
   }
 };

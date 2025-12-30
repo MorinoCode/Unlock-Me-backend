@@ -15,7 +15,8 @@ import swipeRoutes from "./routes/swipeRoutes.js";
 import locationRoutes from "./routes/locationRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import postRoutes from "./routes/postRoutes.js";
-import { addToQueue } from "./utils/blindDateService.js.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
+import { addToQueue } from "./utils/blindDateService.js";
 import BlindSession from "./models/BlindSession.js";
 import BlindQuestion from "./models/BlindQuestion.js";
 
@@ -87,12 +88,23 @@ const io = new Server(server, {
 app.set("io", io);
 
 io.on("connection", (socket) => {
-  // Keeping original join_room logic for compatibility
-  socket.on("join_room", (userId) => {
-    socket.join(userId);
-    socket.userId = userId; 
-    userSocketMap.set(userId, socket.id); // Storing socket ID for real-time notifications
-    console.log(`User ${userId} joined and mapped.`);
+  const userId = socket.handshake.query.userId;
+  
+  if (userId && userId !== "undefined") {
+    socket.userId = userId; // حتماً ذخیره شود برای دیسکانکت
+    socket.join(userId); 
+    userSocketMap.set(userId, socket.id); // اضافه کردن به مپ به محض اتصال
+    console.log(`User ${userId} connected and joined room.`);
+  }
+
+  // این ایونت را نگه دارید اما منطق تکراری را حذف کنید
+  socket.on("join_room", (id) => {
+    if (!socket.userId) {
+      socket.userId = id;
+      socket.join(id);
+      userSocketMap.set(id, socket.id);
+      console.log(`User ${id} joined via join_room.`);
+    }
   });
 
   // Chat typing events
@@ -218,6 +230,7 @@ app.use("/api/swipe", swipeRoutes);
 app.use("/api/locations", locationRoutes);
 app.use("/api/reports", reportRoutes);
 app.use('/api/posts', postRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {

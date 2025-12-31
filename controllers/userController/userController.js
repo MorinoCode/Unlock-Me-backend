@@ -35,7 +35,7 @@ const deleteFromCloudinary = async (url) => {
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.userId).select(
-      "name email avatar bio location phone detailedAddress gallery gender lookingFor questionsbycategoriesResults subscription birthday voiceIntro"
+      "name username email avatar bio location phone detailedAddress gallery gender lookingFor questionsbycategoriesResults subscription birthday voiceIntro"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
@@ -48,7 +48,7 @@ export const getUserById = async (req, res) => {
 export const getUserInformation = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select(
-      "name avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro"
+      "name username avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);

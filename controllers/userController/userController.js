@@ -1,10 +1,41 @@
 import User from "../../models/User.js";
 import bcrypt from "bcryptjs";
+import cloudinary from "../../config/cloudinary.js"; 
 
+// --- تابع کمکی برای پاک کردن فایل از Cloudinary ---
+// این تابع URL فایل را می‌گیرد و آن را از سرورهای کلودینری حذف می‌کند
+const deleteFromCloudinary = async (url) => {
+  if (!url) return;
+  
+  try {
+    // استخراج Public ID از URL
+    // مثال URL: https://res.cloudinary.com/.../unlock_me_gallery/abc12345.jpg
+    // ما نیاز داریم به: unlock_me_gallery/abc12345
+    
+    const regex = /\/([^/]+)\/([^/]+)\.[^.]+$/; // گرفتن نام پوشه و نام فایل
+    const match = url.match(regex);
+    
+    if (match) {
+      const folder = match[1];
+      const filename = match[2];
+      const publicId = `${folder}/${filename}`;
+      
+      // تشخیص نوع فایل (ویس یا عکس)
+      const resourceType = url.includes("/video/") ? "video" : "image";
+
+      await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+      console.log(`Deleted from Cloudinary: ${publicId}`);
+    }
+  } catch (error) {
+    console.error("Error deleting file from Cloudinary:", error);
+  }
+};
+
+// --- دریافت اطلاعات کاربر دیگر (Public) ---
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.userId).select(
-      "name avatar bio location phone detailedAddress gallery gender lookingFor questionsbycategoriesResults subscription birthday"
+      "name email avatar bio location phone detailedAddress gallery gender lookingFor questionsbycategoriesResults subscription birthday voiceIntro"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
@@ -12,10 +43,12 @@ export const getUserById = async (req, res) => {
     res.status(500).json({ message: "Error fetching user", error });
   }
 };
+
+// --- دریافت اطلاعات خود کاربر (Private) ---
 export const getUserInformation = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select(
-      "name avatar bio location gallery gender lookingFor  subscription birthday interests questionsbycategoriesResults"
+      "name avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
@@ -23,49 +56,88 @@ export const getUserInformation = async (req, res) => {
     res.status(500).json({ message: "Error fetching user", error });
   }
 };
+
+// --- آپدیت پروفایل (شامل آواتار و ویس) ---
 export const updateProfileInfo = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
+    // یافتن کاربر فعلی برای دسترسی به اطلاعات قدیمی (جهت حذف)
+    const currentUser = await User.findById(userId);
+    if (!currentUser) return res.status(404).json({ message: "User not found" });
+
     const {
-      name,
-      bio,
-      phone,
-      country,
-      city,
-      gender,
-      lookingFor,
-      birthday,
-      avatar,
+      name, bio, phone, country, city, countryCode,
+      gender, lookingFor, birthday, avatar, voiceIntro,
     } = req.body;
 
-    if (!name || !country || !city || !gender || !lookingFor) {
-      return res
-        .status(400)
-        .json({ message: "فیلدهای ستاره‌دار اجباری هستند." });
+    const updateData = {
+      name, bio, phone,
+      location: { country, city, countryCode },
+      gender, lookingFor, birthday,
+    };
+
+    // ۱. مدیریت آواتار
+    if (avatar && avatar.startsWith("data:image")) {
+      // اگر آواتار جدید است، آواتار قبلی را پاک کن (اگر دیفالت نباشد)
+      if (currentUser.avatar && !currentUser.avatar.includes("default-avatar")) {
+         await deleteFromCloudinary(currentUser.avatar);
+      }
+
+      try {
+        const uploadRes = await cloudinary.uploader.upload(avatar, {
+          folder: "unlock_me_avatars",
+          transformation: [{ width: 500, height: 500, crop: "fill" }],
+        });
+        updateData.avatar = uploadRes.secure_url;
+      } catch (err) {
+        console.log(err);
+        return res.status(500).json({ message: "Avatar upload failed" });
+      }
+    } else if (avatar) {
+      updateData.avatar = avatar;
+    }
+
+    // ۲. مدیریت ویس (Voice Intro) - اصلاح شده برای حذف و جایگزینی
+    if (voiceIntro && voiceIntro.startsWith("data:audio")) {
+      // اگر ویس جدید است، ویس قبلی را پاک کن
+      if (currentUser.voiceIntro) {
+        await deleteFromCloudinary(currentUser.voiceIntro);
+      }
+
+      try {
+        const uploadRes = await cloudinary.uploader.upload(voiceIntro, {
+          resource_type: "video",
+          folder: "unlock_me_voices",
+          public_id: `voice_${userId}_${Date.now()}`,
+          overwrite: true,
+        });
+        updateData.voiceIntro = uploadRes.secure_url;
+      } catch (err) {
+        console.error("Voice upload error:", err);
+        return res.status(500).json({ message: "Voice upload failed" });
+      }
+    } else if (voiceIntro === "") {
+      // اگر کاربر دکمه حذف ویس را زده باشد
+      if (currentUser.voiceIntro) {
+        await deleteFromCloudinary(currentUser.voiceIntro);
+      }
+      updateData.voiceIntro = "";
     }
 
     const updatedUser = await User.findByIdAndUpdate(
       userId,
-      {
-        $set: {
-          name,
-          bio,
-          phone,
-          location: { country, city },
-          gender,
-          lookingFor,
-          birthday,
-          avatar,
-        },
-      },
+      { $set: updateData },
       { new: true, runValidators: true }
     ).select("-password");
 
     res.status(200).json(updatedUser);
   } catch (error) {
+    console.error("Update profile error:", error);
     res.status(500).json({ error: error.message });
   }
 };
+
+// --- تغییر رمز عبور ---
 export const updatePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -85,40 +157,92 @@ export const updatePassword = async (req, res) => {
   }
 };
 
+// --- آپدیت گالری (حذف عکس‌های پاک شده + آپلود عکس‌های جدید) ---
 export const updateGallery = async (req, res) => {
   try {
-    const { images } = req.body;
+    const { images } = req.body; // این آرایه‌ی جدید است که از فرانت می‌آید
     const userId = req.user.userId || req.user.id;
 
     if (!Array.isArray(images) || images.length > 6) {
-      return res
-        .status(400)
-        .json({ message: "Invalid images or max limit (6) exceeded" });
+      return res.status(400).json({ message: "Invalid images or limit exceeded" });
     }
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $set: { gallery: images } },
-      { new: true }
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // الف) پیدا کردن عکس‌های حذف شده
+    // هر عکسی که در دیتابیس هست ولی در آرایه جدید (images) نیست، یعنی حذف شده
+    const imagesToDelete = user.gallery.filter(oldImg => !images.includes(oldImg));
+
+    // ب) حذف عکس‌های حذف شده از Cloudinary
+    for (const imgUrl of imagesToDelete) {
+      await deleteFromCloudinary(imgUrl);
+    }
+
+    // ج) آپلود عکس‌های جدید (که به صورت Base64 هستند)
+    const processedImages = await Promise.all(
+      images.map(async (img) => {
+        if (img.startsWith("data:image")) {
+          try {
+            const uploadRes = await cloudinary.uploader.upload(img, {
+              folder: "unlock_me_gallery",
+              transformation: [{ width: 800, crop: "limit" }]
+            });
+            return uploadRes.secure_url;
+          } catch (err) {
+            console.error("Gallery upload error:", err);
+            throw new Error("Failed to upload gallery image");
+          }
+        }
+        // اگر لینک قدیمی است، دست نزن
+        return img;
+      })
     );
+
+    // د) ذخیره آرایه نهایی در دیتابیس
+    user.gallery = processedImages;
+    await user.save();
+
     res.status(200).json(user.gallery);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
 
+// --- آپدیت علایق ---
 export const updateCategoryAnswers = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
-    const { categoryName, answers } = req.body;
+    const { categoryName, answers, quizResults } = req.body; 
 
     const user = await User.findById(userId);
 
-    user.questionsbycategoriesResults.categories.set(categoryName, answers);
+    if (!user.questionsbycategoriesResults) {
+        user.questionsbycategoriesResults = { categories: new Map() };
+    }
+    if (!user.questionsbycategoriesResults.categories) {
+        user.questionsbycategoriesResults.categories = new Map();
+    }
+
+    // پشتیبانی از هر دو فرمت دیتای قدیمی و جدید
+    if (quizResults) {
+       const grouped = quizResults.reduce((acc, curr) => {
+         if (!acc[curr.category]) acc[curr.category] = [];
+         acc[curr.category].push(curr);
+         return acc;
+       }, {});
+       
+       for (const [cat, ansList] of Object.entries(grouped)) {
+         user.questionsbycategoriesResults.categories.set(cat, ansList);
+       }
+    } else if (categoryName && answers) {
+       user.questionsbycategoriesResults.categories.set(categoryName, answers);
+    }
 
     await user.save();
     res.status(200).json(user.questionsbycategoriesResults);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 };

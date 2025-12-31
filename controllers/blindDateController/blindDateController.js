@@ -1,6 +1,6 @@
 import BlindSession from '../../models/BlindSession.js';
 import BlindQuestion from '../../models/BlindQuestion.js';
-import User from '../models/User.js';
+import { emitNotification } from '../../utils/notificationHelper.js';
 
 export const submitAnswer = async (req, res) => {
   try {
@@ -53,6 +53,7 @@ export const sendStageMessage = async (req, res) => {
   try {
     const { sessionId, text } = req.body;
     const userId = req.user._id;
+    const io = req.app.get("io");
 
     const session = await BlindSession.findById(sessionId);
     const messageCount = session.messages.filter(m => m.sender.toString() === userId.toString()).length;
@@ -68,12 +69,22 @@ export const sendStageMessage = async (req, res) => {
     session.messages.push({ sender: userId, text });
     await session.save();
 
+    const partnerId = session.participants.find(p => p.toString() !== userId.toString());
+    
+    // آپدیت شده: اضافه شدن senderId برای نویگیشن
+    await emitNotification(io, partnerId, {
+      type: "BLIND_MESSAGE",
+      senderId: userId, 
+      senderName: "Anonymous",
+      message: "Sent you a message in Blind Date 🕵️",
+      targetId: sessionId
+    });
+
     res.json(session);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-
 export const proceedToNextStage = async (req, res) => {
   try {
     const { sessionId } = req.body;
@@ -119,6 +130,7 @@ export const handleRevealDecision = async (req, res) => {
   try {
     const { sessionId, decision } = req.body;
     const userId = req.user._id;
+    const io = req.app.get("io");
 
     const session = await BlindSession.findById(sessionId);
     const isUser1 = session.participants[0].toString() === userId.toString();
@@ -131,6 +143,18 @@ export const handleRevealDecision = async (req, res) => {
 
     if (session.revealDecision.u1Reveal && session.revealDecision.u2Reveal) {
       session.status = 'completed';
+      
+      session.participants.forEach(async (pId) => {
+        // آپدیت شده: اضافه شدن senderId (سیستم)
+        await emitNotification(io, pId, {
+          type: "REVEAL_SUCCESS",
+          senderId: userId, // فرستنده ایونت
+          senderName: "System",
+          message: "Congratulations! You both decided to reveal. It's a Match! 🔓",
+          targetId: sessionId
+        });
+      });
+
     } else if (decision === false) {
       session.status = 'cancelled';
     }

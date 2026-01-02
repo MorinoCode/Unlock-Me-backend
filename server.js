@@ -39,7 +39,7 @@ const corsOptions = {
     const allowedOrigins = [
       "http://localhost:5173",
       "https://unlock-me-frontend.vercel.app",
-      "https://unlock-me.io", // Your new professional domain
+      "https://unlock-me.app", // Your new professional domain
     ];
     if (
       !origin ||

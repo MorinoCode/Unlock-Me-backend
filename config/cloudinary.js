@@ -14,7 +14,7 @@ dotenv.config();
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'unlock_me_posts', // نام پوشه در کلود
+    folder: 'unlock_me_posts', 
     allowed_formats: ['jpg', 'png', 'jpeg'],
     transformation: [{ width: 1080, height: 1350, crop: 'limit' }] 
   },

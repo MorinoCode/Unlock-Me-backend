@@ -39,7 +39,8 @@ const corsOptions = {
     const allowedOrigins = [
       "http://localhost:5173",
       "https://unlock-me-frontend.vercel.app",
-      "https://unlock-me.app", // Your new professional domain
+      "https://unlock-me.app",      // دامین اصلی
+      "https://www.unlock-me.app",  // ساب‌دامین www (محض اطمینان)
     ];
     if (
       !origin ||
@@ -48,6 +49,7 @@ const corsOptions = {
     ) {
       callback(null, true);
     } else {
+      console.log("Blocked by CORS:", origin); // لاگ برای دیباگ
       callback(new Error("CORS policy violation"), false);
     }
   },
@@ -67,7 +69,8 @@ const io = new Server(server, {
       const allowedOrigins = [
         "http://localhost:5173",
         "https://unlock-me-frontend.vercel.app",
-        "https://unlock-me.io",
+        "https://unlock-me.app",
+        "https://www.unlock-me.app",
       ];
       if (
         !origin ||

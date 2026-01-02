@@ -55,14 +55,21 @@ export const signupUser = async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    // 7. تنظیم کوکی (هوشمند برای لوکال و پروداکشن)
-    // در لوکال secure باید false باشد تا کار کند، در پروداکشن true
-    const isProduction = process.env.NODE_ENV === "production";
+   const isProduction = process.env.NODE_ENV === "production";
 
     res.cookie("unlock-me-token", token, {
       httpOnly: true,
-      secure: isProduction, // در لوکال (http) اگر true باشد کوکی ست نمی‌شود!
-      sameSite: isProduction ? "none" : "lax",
+      
+      // در پروداکشن حتما True
+      secure: isProduction, 
+      
+      // تغییر مهم: وقتی دامین ست می‌کنیم، Lax بهترین گزینه برای آیفون است
+      sameSite: "lax", 
+      
+      // تغییر حیاتی: این خط باعث می‌شود کوکی بین api و سایت اصلی شیر شود
+      // اگر این را نگذاری، آیفون کوکی را ذخیره نمی‌کند
+      domain: isProduction ? ".unlock-me.app" : undefined, 
+      
       maxAge: 7 * 24 * 60 * 60 * 1000, 
     });
 

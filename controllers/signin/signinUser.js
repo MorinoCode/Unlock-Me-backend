@@ -3,11 +3,13 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
 
-export const signinUser =async (req, res) => {
+export const signinUser = async (req, res) => {
   let { email, password } = req.body;
-  email = email.toLowerCase();
 
   try {
+    // 1. نرمال‌سازی ایمیل (کوچک کردن + حذف فاصله‌های اضافی احتمالی)
+    email = email.toLowerCase().trim();
+
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
@@ -16,15 +18,27 @@ export const signinUser =async (req, res) => {
 
     // JWT token
     const token = jwt.sign(
-      { userId: user._id, role: user.role , location : user.location , username: user.username},
+      { userId: user._id, role: user.role, location: user.location, username: user.username },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
+    // 2. تشخیص محیط (لوکال یا پروداکشن)
+    const isProduction = process.env.NODE_ENV === "production";
+
+    // 3. تنظیم کوکی (اصلاح شده برای آیفون و ساب‌دامین)
     res.cookie("unlock-me-token", token, {
       httpOnly: true,
-      secure: true,
-      sameSite: "none",
+      
+      // در پروداکشن True، در لوکال False (تا روی http کار کند)
+      secure: isProduction, 
+      
+      // بهترین گزینه برای سازگاری با موبایل وقتی دامین ست می‌کنیم
+      sameSite: "lax", 
+      
+      // ⚠️ حیاتی‌ترین خط: اشتراک کوکی بین api.unlock-me.app و unlock-me.app
+      domain: isProduction ? ".unlock-me.app" : undefined, 
+      
       maxAge: 7 * 24 * 60 * 60 * 1000, 
     });
 

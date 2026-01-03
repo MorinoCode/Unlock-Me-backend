@@ -21,111 +21,186 @@ export const getUserLocation = async (req, res) => {
     }
 };
 
+// backend/controllers/exploreController.js
+
 export const getExploreMatches = async (req, res) => {
   try {
-    const { country, category, page = 1, limit = 20 } = req.query;
+    const {  category, page = 1, limit = 20 } = req.query;
     const currentUserId = req.user.userId;
-    
-    // 1. دریافت کاربر به همراه لیست مچ‌های آماده‌اش
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+
+    // دریافت اطلاعات کاربر
     const me = await User.findById(currentUserId)
-        .populate("potentialMatches.user", "name avatar bio interests location birthday subscription gender createdAt isVerified dna") // اینجا Populate می‌کنیم
-        .select("potentialMatches subscription lookingFor location interests");
+        .select("location interests lookingFor subscription potentialMatches");
 
     if (!me) return res.status(404).json({ message: "User not found" });
 
     const userPlan = me.subscription?.plan || "free";
+    
+    // ✅ استفاده از توابع کمکی
     const visibilityThreshold = getVisibilityThreshold(userPlan);
     const soulmatePerms = getSoulmatePermissions(userPlan);
     const isPremium = (userPlan === 'premium' || userPlan === 'platinum');
 
-    // 2. استخراج لیست خام از دیتابیس (بدون محاسبه!)
-    // فقط آنهایی که هنوز وجود دارند (ممکن است یوزر حذف شده باشد پس چک میکنیم user null نباشد)
-    let allPreComputedMatches = me.potentialMatches
-        .filter(m => m.user) 
-        .map(m => ({
-            ...m.user.toObject(),
-            matchScore: m.matchScore // امتیاز از قبل حساب شده
-        }));
-
-    // اگر لیست خالی بود (کاربر تازه عضو شده و ورکر هنوز اجرا نشده)
-    // یک فال‌بک سریع (Fallback) می‌گذاریم
-    if (allPreComputedMatches.length === 0) {
-        // اینجا یک کوئری ساده "آخرین کاربران" می‌زنیم که خالی نباشد
-        const fallbackUsers = await User.find({
-             _id: { $ne: currentUserId },
-             "location.country": me.location.country 
-        }).limit(20).lean();
-        // یک اسکور فیک برایشان میگذاریم موقتا
-        allPreComputedMatches = fallbackUsers.map(u => ({ ...u, matchScore: 70 }));
-    }
-
-    // 3. جداسازی استخرها (دقیقاً مثل قبل، ولی روی دیتای آماده)
-    
-    // الف) Soulmates (بالای 80)
-    const soulmatePool = allPreComputedMatches.filter(u => u.matchScore >= 80)
-                                              .sort((a, b) => b.matchScore - a.matchScore);
-
-    // ب) General Pool
-    let generalPool;
-    if (isPremium) {
-        generalPool = allPreComputedMatches;
-    } else {
-        generalPool = allPreComputedMatches.filter(u => u.matchScore < visibilityThreshold);
-    }
-
-    // ---------------------------------------------------------
-    // MODE 1: Category Page (View All)
-    // ---------------------------------------------------------
-    if (category && category !== 'undefined') {
-        let finalUsers = [];
-
-        if (category === 'soulmates') {
-            if (soulmatePerms.isLocked) return res.status(403).json({ message: "Upgrade required." });
-            finalUsers = soulmatePerms.limit === Infinity ? soulmatePool : soulmatePool.slice(0, soulmatePerms.limit);
-        } else if (category === 'new') {
-             // برای Newest شاید بهتر باشد یک کوئری زنده سبک بزنیم
-             // اما فعلا از همین جنرال پول سورت میکنیم
-             finalUsers = [...generalPool].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        } else {
-             // Nearby, Interests, ...
-             // اینجا دیگر فیلترها را روی آرایه generalPool انجام میدهیم (چون تعداد کمه - ۱۰۰ تا - سریعه)
-             finalUsers = [...generalPool];
-             if (category === 'nearby') {
-                 finalUsers = finalUsers.filter(u => u.location?.city === me.location?.city);
-             }
-             finalUsers.sort((a,b) => b.matchScore - a.matchScore);
+    // =========================================================
+    // 🔵 MODE 1: View All - Cached Strategy (Soulmates, Interests)
+    // =========================================================
+    if (category === 'soulmates' || category === 'interests') {
+        
+        // ✅ چک کردن دسترسی برای سول‌میت
+        if (category === 'soulmates' && soulmatePerms.isLocked) {
+             return res.status(403).json({ message: "Upgrade required to view Soulmates." });
         }
 
-        // Pagination (Simple array slicing)
-        const startIndex = (parseInt(page) - 1) * parseInt(limit);
-        const paginatedUsers = finalUsers.slice(startIndex, startIndex + parseInt(limit));
+        await me.populate({
+            path: "potentialMatches.user",
+            select: "name avatar bio interests location birthday subscription gender createdAt isVerified dna"
+        });
+
+        let cachedUsers = me.potentialMatches
+            .filter(m => m.user)
+            .map(m => ({ ...m.user.toObject(), matchScore: m.matchScore }));
+
+        if (category === 'soulmates') {
+            cachedUsers = cachedUsers.filter(u => u.matchScore >= 80);
+        } else if (category === 'interests') {
+            cachedUsers = cachedUsers.filter(u => u.interests.some(i => me.interests.includes(i)));
+        }
+
+        cachedUsers.sort((a, b) => b.matchScore - a.matchScore);
+
+        const totalUsers = cachedUsers.length;
+        const totalPages = Math.ceil(totalUsers / limitNum);
+        const startIndex = (pageNum - 1) * limitNum;
+        const paginatedUsers = cachedUsers.slice(startIndex, startIndex + limitNum);
 
         return res.status(200).json({
-            userPlan, mode: "category", users: paginatedUsers,
-            pagination: { currentPage: page, totalPages: Math.ceil(finalUsers.length / limit), totalUsers: finalUsers.length }
+            mode: "cached_list",
+            users: paginatedUsers,
+            pagination: { currentPage: pageNum, totalPages, totalUsers }
         });
     }
 
-    // ---------------------------------------------------------
-    // MODE 2: Overview Page
-    // ---------------------------------------------------------
+    // =========================================================
+    // 🟢 MODE 2: View All - Live DB Strategy (New, Nearby, Country)
+    // =========================================================
+    else if (category === 'new' || category === 'nearby' || category === 'country') {
+        
+        let dbQuery = {
+            _id: { $ne: currentUserId },
+            "location.country": me.location.country
+        };
+
+        if (me.lookingFor && me.lookingFor !== 'all') {
+            dbQuery.gender = { $regex: new RegExp(`^${me.lookingFor}$`, "i") };
+        }
+
+        if (category === 'nearby') {
+            if (me.location?.city) {
+                 dbQuery["location.city"] = { $regex: new RegExp(`^${escapeRegex(me.location.city)}$`, "i") };
+            }
+        }
+        
+        let sortOption = { createdAt: -1 }; 
+        if (category === 'country') sortOption = { createdAt: -1 };
+
+        const totalUsers = await User.countDocuments(dbQuery);
+        const totalPages = Math.ceil(totalUsers / limitNum);
+        
+        const candidates = await User.find(dbQuery)
+            .select("name avatar bio interests location birthday subscription gender createdAt isVerified dna")
+            .sort(sortOption)
+            .skip((pageNum - 1) * limitNum)
+            .limit(limitNum)
+            .lean();
+
+        const processedUsers = candidates.map(user => {
+             const cached = me.potentialMatches?.find(m => m.user.toString() === user._id.toString());
+             const score = cached ? cached.matchScore : calculateCompatibility(me, user);
+             return { ...user, matchScore: score, dna: calculateUserDNA(user) };
+        });
+        
+        // اینجا هم می‌توانیم سورت کنیم اگر نیاز بود
+        if (category !== 'new') {
+             processedUsers.sort((a, b) => b.matchScore - a.matchScore);
+        }
+
+        return res.status(200).json({
+            mode: "live_list",
+            users: processedUsers,
+            pagination: { currentPage: pageNum, totalPages, totalUsers }
+        });
+    }
+
+    // =========================================================
+    // 🟡 MODE 3: Overview / Dashboard (Missing Part Fixed!) ✅
+    // =========================================================
     else {
+        await me.populate({
+            path: "potentialMatches.user",
+            select: "name avatar bio interests location birthday subscription gender createdAt isVerified dna"
+        });
+
+        let allMatches = me.potentialMatches
+            .filter(m => m.user)
+            .map(m => ({ ...m.user.toObject(), matchScore: m.matchScore }));
+
+        // Fallback برای کاربران جدید
+        if (allMatches.length === 0) {
+             const fallbackUsers = await User.find({
+                 _id: { $ne: currentUserId },
+                 "location.country": me.location.country 
+             }).limit(20).lean();
+             allMatches = fallbackUsers.map(u => ({ ...u, matchScore: calculateCompatibility(me, u) }));
+        }
+
+        // 1. ساخت استخر Soulmates
+        const soulmatePool = allMatches
+            .filter(u => u.matchScore >= 80)
+            .sort((a, b) => b.matchScore - a.matchScore);
+
+        // 2. ساخت استخر عمومی (General) با اعمال محدودیت دید (Visibility Threshold)
+        let generalPool;
+        if (isPremium) {
+            generalPool = allMatches; // پرمیوم همه را می‌بیند
+        } else {
+            // رایگان‌ها افراد بالای ۸۰٪ (خیلی جذاب) را در لیست عمومی نمی‌بینند تا مجبور به ارتقا شوند
+            generalPool = allMatches.filter(u => u.matchScore < visibilityThreshold);
+        }
+
+        // 3. اعمال محدودیت روی Soulmates (قفل بودن یا محدودیت تعداد)
         let finalSoulmates = [];
         if (!soulmatePerms.isLocked) {
-            finalSoulmates = soulmatePerms.limit === Infinity
-                ? shuffleArray([...soulmatePool]).slice(0, 10)
+             // ✅ استفاده از shuffleArray برای تنوع در نمایش (اگر لیمیت نامحدود باشد)
+             finalSoulmates = soulmatePerms.limit === Infinity 
+                ? shuffleArray([...soulmatePool]).slice(0, 10) 
                 : soulmatePool.slice(0, soulmatePerms.limit);
         }
 
+        // 4. ساختن سکشن‌ها (اینجا shuffleArray خیلی مهم است تا صفحه تکراری نباشد)
         const sections = {
             soulmates: finalSoulmates,
-            freshFaces: shuffleArray([...generalPool]).slice(0, 10), // ساده شده
-            cityMatches: shuffleArray(generalPool.filter(u => u.location?.city === me.location?.city)).slice(0, 10),
-            interestMatches: shuffleArray(generalPool.filter(u => u.interests.some(i => me.interests.includes(i)))).slice(0, 10),
+            
+            // ✅ استفاده از shuffleArray
+            freshFaces: shuffleArray([...generalPool]).slice(0, 10), 
+            
+            cityMatches: shuffleArray(
+                generalPool.filter(u => u.location?.city === me.location?.city)
+            ).slice(0, 10),
+            
+            interestMatches: shuffleArray(
+                generalPool.filter(u => u.interests.some(i => me.interests.includes(i)))
+            ).slice(0, 10),
+            
             countryMatches: shuffleArray([...generalPool]).slice(0, 10)
         };
 
-        return res.status(200).json({ userPlan, mode: "overview", sections });
+        return res.status(200).json({ 
+            userPlan, 
+            mode: "overview", 
+            sections 
+        });
     }
 
   } catch (err) {

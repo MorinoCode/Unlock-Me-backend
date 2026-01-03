@@ -1,10 +1,14 @@
+// backend/controllers/exploreController.js
+
 import User from "../../models/User.js";
 import { 
   calculateCompatibility, 
   calculateUserDNA, 
-  getUserVisibilityThreshold, 
   shuffleArray, 
-  generateMatchInsights // ✅ اضافه شد
+  generateMatchInsights,
+  getVisibilityThreshold,
+  getSoulmatePermissions,
+  escapeRegex
 } from "../../utils/matchUtils.js";
 
 export const getUserLocation = async (req, res) => {
@@ -28,123 +32,150 @@ export const getExploreMatches = async (req, res) => {
     if (!me) return res.status(404).json({ message: "User not found" });
 
     const userPlan = me.subscription?.plan || "free";
-    const userThreshold = getUserVisibilityThreshold(userPlan);
+    const visibilityThreshold = getVisibilityThreshold(userPlan); 
+    const soulmatePerms = getSoulmatePermissions(userPlan); 
+    const isPremium = (userPlan === 'premium' || userPlan === 'platinum');
 
+    // 1. ساخت کوئری دیتابیس
     let query = {
-      _id: { $ne: currentUserId },
-      "location.country": { $regex: new RegExp(`^${country}$`, "i") }
+      _id: { $ne: currentUserId }
     };
 
-    if (me.lookingFor) {
-      query.gender = { $regex: new RegExp(`^${me.lookingFor}$`, "i") };
+    if (country) {
+        query["location.country"] = { $regex: new RegExp(`^${escapeRegex(country)}$`, "i") };
     }
 
+    if (me.lookingFor) {
+      query.gender = { $regex: new RegExp(`^${escapeRegex(me.lookingFor)}$`, "i") };
+    }
+
+    if (category === 'nearby') {
+        const myCity = me.location?.city?.trim();
+        if (myCity) {
+            query["location.city"] = { $regex: new RegExp(`^${escapeRegex(myCity)}$`, "i") };
+        }
+    }
+
+    // 2. دریافت کاندیداها
+    // ✅ FIX 2: Discovery Bias Fix -> استفاده از .sort({ updatedAt: -1 })
+    // این باعث می‌شود کاربران فعال (که اخیراً آپدیت شده‌اند) اولویت داشته باشند
+    const candidates = await User.find(query)
+      .select("name avatar bio interests location birthday questionsbycategoriesResults subscription gender createdAt updatedAt isVerified dna") // dna را هم سلکت کردم
+      .sort({ updatedAt: -1 }) // <--- تغییر حیاتی: جدیدترین‌های فعال اول می‌آیند
+      .limit(category ? 1000 : 500)
+      .lean();
+
+    // 3. پردازش اولیه
+    const processedUsers = candidates.map(user => ({
+      ...user,
+      matchScore: calculateCompatibility(me, user),
+      dna: calculateUserDNA(user)
+    }));
+
+    // =========================================================
+    // 4. منطق استخرها (Pool Logic)
+    // =========================================================
+
+    // A. استخر سول‌میت: همیشه افراد بالای ۸۰٪
+    const soulmatePool = processedUsers.filter(u => u.matchScore >= 80)
+                                       .sort((a, b) => b.matchScore - a.matchScore);
+
+    // B. استخر عمومی
+    let generalPool;
+    if (isPremium) {
+        generalPool = processedUsers; 
+    } else {
+        generalPool = processedUsers.filter(u => u.matchScore < visibilityThreshold);
+    }
+
+    // ---------------------------------------------------------
+    // MODE 1: Category Page (View All)
+    // ---------------------------------------------------------
     if (category && category !== 'undefined') {
-      
-      if (category === 'nearby') {
-         const myCity = me.location?.city?.trim();
-         if (myCity) query["location.city"] = { $regex: new RegExp(`^${myCity}$`, "i") };
+      let finalUsers = [];
+
+      if (category === 'soulmates') {
+        if (soulmatePerms.isLocked) {
+           return res.status(403).json({ message: "Upgrade required." });
+        }
+        finalUsers = soulmatePerms.limit === Infinity 
+            ? soulmatePool 
+            : soulmatePool.slice(0, soulmatePerms.limit);
+      } 
+      else {
+        finalUsers = [...generalPool];
+
+        switch (category) {
+          case 'new':
+            finalUsers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            break;
+          case 'interests':
+            finalUsers = finalUsers.filter(u => u.interests.some(i => me.interests.includes(i)))
+                                   .sort((a, b) => b.matchScore - a.matchScore);
+            break;
+          default:
+            finalUsers.sort((a, b) => b.matchScore - a.matchScore);
+        }
       }
 
-      const candidates = await User.find(query)
-        .select("name avatar bio interests location birthday questionsbycategoriesResults subscription gender createdAt isVerified")
-        .lean();
-
-      const processedUsers = candidates.map(user => ({
-        ...user,
-        matchScore: calculateCompatibility(me, user),
-        dna: calculateUserDNA(user)
-      }));
-
-      let filteredList = [];
-      switch (category) {
-        case 'soulmates':
-          filteredList = processedUsers.filter(u => u.matchScore >= 80).sort((a, b) => b.matchScore - a.matchScore);
-          break;
-        case 'nearby':
-          filteredList = processedUsers.sort((a, b) => b.matchScore - a.matchScore);
-          break;
-        case 'interests':
-          filteredList = processedUsers.filter(u => u.interests.some(i => me.interests.includes(i))).sort((a, b) => b.matchScore - a.matchScore);
-          break;
-        case 'new':
-          filteredList = processedUsers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-          break;
-        case 'country':
-        default:
-          filteredList = processedUsers.sort((a, b) => b.matchScore - a.matchScore);
-          break;
-      }
-
-      const totalUsers = filteredList.length;
+      // Pagination
+      const totalUsers = finalUsers.length;
       const totalPages = Math.ceil(totalUsers / limitNum);
       const startIndex = (pageNum - 1) * limitNum;
-      
-      const paginatedUsers = filteredList.slice(startIndex, startIndex + limitNum);
+      const paginatedUsers = finalUsers.slice(startIndex, startIndex + limitNum);
 
       return res.status(200).json({
-        userPlan: userPlan,
-        mode: "category", 
+        userPlan,
+        mode: "category",
         users: paginatedUsers,
         pagination: { currentPage: pageNum, totalPages, totalUsers }
       });
     }
 
+    // ---------------------------------------------------------
+    // MODE 2: Overview Page
+    // ---------------------------------------------------------
     else {
-      const allMatches = await User.find(query).limit(500).lean(); 
-      
-      let processedUsers = allMatches.map(user => ({
-        ...user,
-        matchScore: calculateCompatibility(me, user)
-      }));
-
-      processedUsers = processedUsers.filter(u => u.matchScore <= userThreshold);
-
-      const highScores = processedUsers.filter(u => u.matchScore >= 80);
-      const randomSoulmates = shuffleArray([...highScores]).slice(0, 10);
-
-      const recentUsers = [...processedUsers]
-        .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))
-        .slice(0, 100);
-      const randomFreshFaces = shuffleArray(recentUsers).slice(0, 10);
-
-      const cityUsers = processedUsers.filter(u => 
-        u.location?.city?.toLowerCase() === me.location?.city?.toLowerCase()
-      );
-      const randomCityMatches = shuffleArray([...cityUsers]).slice(0, 10);
-
-      const interestUsers = processedUsers.filter(u => u.interests.some(i => me.interests.includes(i)));
-      const randomInterestMatches = shuffleArray([...interestUsers]).slice(0, 10);
-
-      const topCountryUsers = [...processedUsers]
-          .sort((a,b) => b.matchScore - a.matchScore)
-          .slice(0, 100);
-      const randomCountryMatches = shuffleArray(topCountryUsers).slice(0, 10);
+      let finalSoulmates = [];
+      if (!soulmatePerms.isLocked) {
+          finalSoulmates = soulmatePerms.limit === Infinity
+              ? shuffleArray([...soulmatePool]).slice(0, 10)
+              : soulmatePool.slice(0, soulmatePerms.limit);
+      }
 
       const sections = {
-        soulmates: randomSoulmates,
-        freshFaces: randomFreshFaces,
-        cityMatches: randomCityMatches,
-        interestMatches: randomInterestMatches,
-        countryMatches: randomCountryMatches
+        soulmates: finalSoulmates,
+        
+        freshFaces: shuffleArray([...generalPool]
+          .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))
+          .slice(0, 50)).slice(0, 10),
+
+        cityMatches: shuffleArray(generalPool.filter(u => 
+          u.location?.city?.trim().toLowerCase() === me.location?.city?.trim().toLowerCase() // اینجا هم trim اضافه شد برای اطمینان
+        )).slice(0, 10),
+
+        interestMatches: shuffleArray(generalPool.filter(u => 
+           u.interests.some(i => me.interests.includes(i))
+        )).slice(0, 10),
+
+        countryMatches: shuffleArray([...generalPool]
+          .sort((a,b) => b.matchScore - a.matchScore)
+          .slice(0, 50)).slice(0, 10)
       };
 
       return res.status(200).json({
-        userPlan: userPlan,
+        userPlan,
         mode: "overview",
-        sections: sections 
+        sections
       });
     }
 
   } catch (err) {
-    console.error(err);
+    console.error("Explore Error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
 
-// ==========================================
-// ✅ آپدیت شده: اضافه شدن Insights به جزئیات کاربر
-// ==========================================
 export const getUserDetails = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -155,20 +186,15 @@ export const getUserDetails = async (req, res) => {
 
     const me = await User.findById(currentUserId);
     
-    // محاسبه امتیاز
     const score = calculateCompatibility(me, targetUser);
-    
-    // محاسبه DNA
     const dna = calculateUserDNA(targetUser);
-
-    // ✅ تولید تحلیل هوشمند (Insights)
     const insights = generateMatchInsights(me, targetUser);
 
     res.status(200).json({
       ...targetUser.toObject(),
       matchScore: score,
       dna: dna,
-      insights: insights // حالا فرانت می‌تواند این را هم نمایش دهد
+      insights: insights 
     });
   } catch (err) {
     res.status(500).json({ message: "Server error" ,err});

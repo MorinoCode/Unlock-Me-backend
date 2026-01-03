@@ -106,7 +106,6 @@ io.on("connection", (socket) => {
       socket.userId = id;
       socket.join(id);
       userSocketMap.set(id, socket.id);
-      console.log(`User ${id} joined via join_room.`);
     }
   });
 

@@ -1,6 +1,7 @@
 import User from "../../models/User.js";
 import InitialQuizzes from "../../models/initialQuizzes.js";
 import questionByCategory from "../../models/questionByCategory.js";
+import { calculateUserDNA } from "../../utils/matchUtils.js";
 
 // ---------- Birthday ----------
 export const saveBirthday = async (req, res) => {
@@ -72,7 +73,6 @@ export const getInterests = async (req, res) => {
   }
 };
 
-
 export const QuestionsByCategory = async (req, res) => {
   try {
     const { selectedCategories } = req.body; 
@@ -111,14 +111,16 @@ export const getUserInterestCategories = async (req, res) => {
   }
 };
 
-// اصلاح متد ذخیره برای جلوگیری از پاک شدن علایق قبلی
 export const saveUserInterestCategoriesQuestinsAnswer = async (req, res) => {
   try {
     const { quizResults } = req.body; 
+    
+    // اعتبارسنجی ورودی
     if (!quizResults || !Array.isArray(quizResults)) {
       return res.status(400).json({ message: "Invalid quiz data" });
     }
 
+    // گروه‌بندی جواب‌ها
     const groupedResults = {};
     const categoryNames = new Set(); 
 
@@ -139,20 +141,33 @@ export const saveUserInterestCategoriesQuestinsAnswer = async (req, res) => {
       updateQuery[`questionsbycategoriesResults.categories.${category}`] = groupedResults[category];
     }
 
+    // 1. آپدیت جواب‌ها در دیتابیس
     const updatedUser = await User.findByIdAndUpdate(
       req.user.userId,
       { 
         $set: updateQuery,
-        // اضافه کردن نام کتگوری به آرایه interests برای نمایش در لیست اصلی
         $addToSet: { interests: { $each: Array.from(categoryNames) } }
       },
-      { new: true }
+      { new: true } // گرفتن نسخه آپدیت شده یوزر
     );
+
+    if (!updatedUser) return res.status(404).json({ message: "User not found" });
+
+    // ✅ 2. محاسبه مجدد DNA (با فلگ true برای نادیده گرفتن کش)
+    // الان که "Detail-oriented" را به مپینگ اضافه کردیم، این تابع درست کار می‌کند
+    const newDNA = calculateUserDNA(updatedUser, true);
+    
+    // ✅ 3. ذخیره DNA در دیتابیس
+    updatedUser.dna = newDNA;
+    await updatedUser.save();
+
+    console.log("🧬 DNA Updated:", newDNA); // برای اطمینان در کنسول ببینید
 
     res.status(200).json({ 
       message: "Category and Interests updated successfully",
       categoriesSaved: Array.from(categoryNames),
-      updatedUser
+      updatedUser,
+      dna: newDNA // ارسال به فرانت
     });
   } catch (err) {
     console.error("Error saving quiz results:", err);
@@ -177,8 +192,6 @@ export const saveLocation = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
-
-
 
 export const saveBio = async (req, res) => {
   try {

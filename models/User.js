@@ -106,6 +106,13 @@ const userSchema = new mongoose.Schema(
       validate: [arrayLimit, "{PATH} exceeds the limit of 6"],
     },
     voiceIntro: { type: String, default: "" },
+    dna: {
+    Logic: { type: Number, default: 50 },
+    Emotion: { type: Number, default: 50 },
+    Energy: { type: Number, default: 50 },
+    Creativity: { type: Number, default: 50 },
+    Discipline: { type: Number, default: 50 }
+  },
   },
   { timestamps: true }
 );

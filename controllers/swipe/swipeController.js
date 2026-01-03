@@ -10,7 +10,9 @@ export const getSwipeCards = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.userId;
     
-    const me = await User.findById(currentUserId);
+    // 1. دریافت کاربر به همراه لیست مچ‌های آماده (potentialMatches)
+    const me = await User.findById(currentUserId).select("location interests lookingFor potentialMatches likedUsers dislikedUsers superLikedUsers dna");
+    
     if (!me) return res.status(404).json({ message: "User not found" });
 
     const myCountry = me.location?.country;
@@ -33,16 +35,36 @@ export const getSwipeCards = async (req, res) => {
     };
 
     if (me.lookingFor && me.lookingFor !== 'all') {
+      // استفاده از Regex برای تطابق دقیق‌تر (case-insensitive)
       query.gender = { $regex: new RegExp(`^${me.lookingFor}$`, "i") };
     }
 
+    // 2. انتخاب تصادفی کاربران (Candidates)
     const candidates = await User.aggregate([
       { $match: query },
       { $sample: { size: 20 } } 
     ]);
 
+    // 3. ترکیب اطلاعات با دیتای کش شده توسط Worker
     const enrichedCards = candidates.map(user => {
-      const compatibility = calculateCompatibility(me, user);
+      
+      // ✅ بهینه‌سازی حیاتی: اول کش را چک کن!
+      // بررسی می‌کنیم آیا Worker قبلاً امتیازی برای این یوزر حساب کرده؟
+      const preCalculatedMatch = me.potentialMatches?.find(
+          m => m.user.toString() === user._id.toString()
+      );
+
+      let compatibility;
+      
+      if (preCalculatedMatch) {
+          // اگر در کش بود، از همان استفاده کن (بدون فشار به CPU)
+          compatibility = preCalculatedMatch.matchScore;
+      } else {
+          // اگر نبود (کاربر جدید)، در لحظه حساب کن
+          compatibility = calculateCompatibility(me, user);
+      }
+
+      // DNA قبلاً در یوزر ذخیره شده، اینجا فقط فرمت‌دهی می‌شود
       const dnaProfile = calculateUserDNA(user);
       const insights = generateMatchInsights(me, user);
 
@@ -62,7 +84,7 @@ export const getSwipeCards = async (req, res) => {
         location: user.location,
         voiceIntro: user.voiceIntro || null, 
 
-        matchScore: compatibility,   
+        matchScore: compatibility,   // ✅ امتیاز (یا از کش یا محاسبه شده)
         dna: dnaProfile,             
         insights: insights,
         icebreaker: icebreakerHint,  

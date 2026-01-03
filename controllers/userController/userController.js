@@ -1,6 +1,11 @@
 import User from "../../models/User.js";
 import bcrypt from "bcryptjs";
 import cloudinary from "../../config/cloudinary.js"; 
+import { Resend } from "resend"; 
+import crypto from "crypto";
+import { getPasswordResetTemplate } from "../../templates/emailTemplates.js";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // --- تابع کمکی برای پاک کردن فایل از Cloudinary ---
 // این تابع URL فایل را می‌گیرد و آن را از سرورهای کلودینری حذف می‌کند
@@ -243,6 +248,47 @@ export const updateCategoryAnswers = async (req, res) => {
     res.status(200).json(user.questionsbycategoriesResults);
   } catch (error) {
     console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const forgotPassword = async (req, res) => {
+  try {
+    let { email } = req.body;
+    email = email.toLowerCase().trim();
+
+    const user = await User.findOne({ email });
+    if (!user) {
+     
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const tempPassword = crypto.randomBytes(4).toString("hex");
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(tempPassword, salt);
+    await user.save();
+
+    const { data, error } = await resend.emails.send({
+      from: "UnlockMe Support <noreply@unlock-me.app>", 
+      to: [email],
+      subject: "Your New Password - UnlockMe",
+      html: getPasswordResetTemplate(user.name , tempPassword),
+    });
+    
+    if(data){
+      return res.status(200).json({ message : "Please check your email"})
+    }
+
+    if (error) {
+      console.error("Resend Error:", error);
+      return res.status(500).json({ message: "Error sending email", error });
+    }
+
+    res.status(200).json({ message: "New password sent to your email." });
+
+  } catch (error) {
+    console.error("Forgot Password Error:", error);
     res.status(500).json({ error: error.message });
   }
 };

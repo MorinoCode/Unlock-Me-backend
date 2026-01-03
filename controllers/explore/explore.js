@@ -1,10 +1,14 @@
+// backend/controllers/exploreController.js
+
 import User from "../../models/User.js";
 import { 
   calculateCompatibility, 
   calculateUserDNA, 
-  getUserVisibilityThreshold, 
   shuffleArray, 
-  generateMatchInsights // ✅ اضافه شد
+  generateMatchInsights,
+  getVisibilityThreshold,
+  getSoulmatePermissions,
+  escapeRegex
 } from "../../utils/matchUtils.js";
 
 export const getUserLocation = async (req, res) => {
@@ -21,130 +25,115 @@ export const getExploreMatches = async (req, res) => {
   try {
     const { country, category, page = 1, limit = 20 } = req.query;
     const currentUserId = req.user.userId;
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
+    
+    // 1. دریافت کاربر به همراه لیست مچ‌های آماده‌اش
+    const me = await User.findById(currentUserId)
+        .populate("potentialMatches.user", "name avatar bio interests location birthday subscription gender createdAt isVerified dna") // اینجا Populate می‌کنیم
+        .select("potentialMatches subscription lookingFor location interests");
 
-    const me = await User.findById(currentUserId);
     if (!me) return res.status(404).json({ message: "User not found" });
 
     const userPlan = me.subscription?.plan || "free";
-    const userThreshold = getUserVisibilityThreshold(userPlan);
+    const visibilityThreshold = getVisibilityThreshold(userPlan);
+    const soulmatePerms = getSoulmatePermissions(userPlan);
+    const isPremium = (userPlan === 'premium' || userPlan === 'platinum');
 
-    let query = {
-      _id: { $ne: currentUserId },
-      "location.country": { $regex: new RegExp(`^${country}$`, "i") }
-    };
+    // 2. استخراج لیست خام از دیتابیس (بدون محاسبه!)
+    // فقط آنهایی که هنوز وجود دارند (ممکن است یوزر حذف شده باشد پس چک میکنیم user null نباشد)
+    let allPreComputedMatches = me.potentialMatches
+        .filter(m => m.user) 
+        .map(m => ({
+            ...m.user.toObject(),
+            matchScore: m.matchScore // امتیاز از قبل حساب شده
+        }));
 
-    if (me.lookingFor) {
-      query.gender = { $regex: new RegExp(`^${me.lookingFor}$`, "i") };
+    // اگر لیست خالی بود (کاربر تازه عضو شده و ورکر هنوز اجرا نشده)
+    // یک فال‌بک سریع (Fallback) می‌گذاریم
+    if (allPreComputedMatches.length === 0) {
+        // اینجا یک کوئری ساده "آخرین کاربران" می‌زنیم که خالی نباشد
+        const fallbackUsers = await User.find({
+             _id: { $ne: currentUserId },
+             "location.country": me.location.country 
+        }).limit(20).lean();
+        // یک اسکور فیک برایشان میگذاریم موقتا
+        allPreComputedMatches = fallbackUsers.map(u => ({ ...u, matchScore: 70 }));
     }
 
+    // 3. جداسازی استخرها (دقیقاً مثل قبل، ولی روی دیتای آماده)
+    
+    // الف) Soulmates (بالای 80)
+    const soulmatePool = allPreComputedMatches.filter(u => u.matchScore >= 80)
+                                              .sort((a, b) => b.matchScore - a.matchScore);
+
+    // ب) General Pool
+    let generalPool;
+    if (isPremium) {
+        generalPool = allPreComputedMatches;
+    } else {
+        generalPool = allPreComputedMatches.filter(u => u.matchScore < visibilityThreshold);
+    }
+
+    // ---------------------------------------------------------
+    // MODE 1: Category Page (View All)
+    // ---------------------------------------------------------
     if (category && category !== 'undefined') {
-      
-      if (category === 'nearby') {
-         const myCity = me.location?.city?.trim();
-         if (myCity) query["location.city"] = { $regex: new RegExp(`^${myCity}$`, "i") };
-      }
+        let finalUsers = [];
 
-      const candidates = await User.find(query)
-        .select("name avatar bio interests location birthday questionsbycategoriesResults subscription gender createdAt isVerified")
-        .lean();
+        if (category === 'soulmates') {
+            if (soulmatePerms.isLocked) return res.status(403).json({ message: "Upgrade required." });
+            finalUsers = soulmatePerms.limit === Infinity ? soulmatePool : soulmatePool.slice(0, soulmatePerms.limit);
+        } else if (category === 'new') {
+             // برای Newest شاید بهتر باشد یک کوئری زنده سبک بزنیم
+             // اما فعلا از همین جنرال پول سورت میکنیم
+             finalUsers = [...generalPool].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        } else {
+             // Nearby, Interests, ...
+             // اینجا دیگر فیلترها را روی آرایه generalPool انجام میدهیم (چون تعداد کمه - ۱۰۰ تا - سریعه)
+             finalUsers = [...generalPool];
+             if (category === 'nearby') {
+                 finalUsers = finalUsers.filter(u => u.location?.city === me.location?.city);
+             }
+             finalUsers.sort((a,b) => b.matchScore - a.matchScore);
+        }
 
-      const processedUsers = candidates.map(user => ({
-        ...user,
-        matchScore: calculateCompatibility(me, user),
-        dna: calculateUserDNA(user)
-      }));
+        // Pagination (Simple array slicing)
+        const startIndex = (parseInt(page) - 1) * parseInt(limit);
+        const paginatedUsers = finalUsers.slice(startIndex, startIndex + parseInt(limit));
 
-      let filteredList = [];
-      switch (category) {
-        case 'soulmates':
-          filteredList = processedUsers.filter(u => u.matchScore >= 80).sort((a, b) => b.matchScore - a.matchScore);
-          break;
-        case 'nearby':
-          filteredList = processedUsers.sort((a, b) => b.matchScore - a.matchScore);
-          break;
-        case 'interests':
-          filteredList = processedUsers.filter(u => u.interests.some(i => me.interests.includes(i))).sort((a, b) => b.matchScore - a.matchScore);
-          break;
-        case 'new':
-          filteredList = processedUsers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-          break;
-        case 'country':
-        default:
-          filteredList = processedUsers.sort((a, b) => b.matchScore - a.matchScore);
-          break;
-      }
-
-      const totalUsers = filteredList.length;
-      const totalPages = Math.ceil(totalUsers / limitNum);
-      const startIndex = (pageNum - 1) * limitNum;
-      
-      const paginatedUsers = filteredList.slice(startIndex, startIndex + limitNum);
-
-      return res.status(200).json({
-        userPlan: userPlan,
-        mode: "category", 
-        users: paginatedUsers,
-        pagination: { currentPage: pageNum, totalPages, totalUsers }
-      });
+        return res.status(200).json({
+            userPlan, mode: "category", users: paginatedUsers,
+            pagination: { currentPage: page, totalPages: Math.ceil(finalUsers.length / limit), totalUsers: finalUsers.length }
+        });
     }
 
+    // ---------------------------------------------------------
+    // MODE 2: Overview Page
+    // ---------------------------------------------------------
     else {
-      const allMatches = await User.find(query).limit(500).lean(); 
-      
-      let processedUsers = allMatches.map(user => ({
-        ...user,
-        matchScore: calculateCompatibility(me, user)
-      }));
+        let finalSoulmates = [];
+        if (!soulmatePerms.isLocked) {
+            finalSoulmates = soulmatePerms.limit === Infinity
+                ? shuffleArray([...soulmatePool]).slice(0, 10)
+                : soulmatePool.slice(0, soulmatePerms.limit);
+        }
 
-      processedUsers = processedUsers.filter(u => u.matchScore <= userThreshold);
+        const sections = {
+            soulmates: finalSoulmates,
+            freshFaces: shuffleArray([...generalPool]).slice(0, 10), // ساده شده
+            cityMatches: shuffleArray(generalPool.filter(u => u.location?.city === me.location?.city)).slice(0, 10),
+            interestMatches: shuffleArray(generalPool.filter(u => u.interests.some(i => me.interests.includes(i)))).slice(0, 10),
+            countryMatches: shuffleArray([...generalPool]).slice(0, 10)
+        };
 
-      const highScores = processedUsers.filter(u => u.matchScore >= 80);
-      const randomSoulmates = shuffleArray([...highScores]).slice(0, 10);
-
-      const recentUsers = [...processedUsers]
-        .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))
-        .slice(0, 100);
-      const randomFreshFaces = shuffleArray(recentUsers).slice(0, 10);
-
-      const cityUsers = processedUsers.filter(u => 
-        u.location?.city?.toLowerCase() === me.location?.city?.toLowerCase()
-      );
-      const randomCityMatches = shuffleArray([...cityUsers]).slice(0, 10);
-
-      const interestUsers = processedUsers.filter(u => u.interests.some(i => me.interests.includes(i)));
-      const randomInterestMatches = shuffleArray([...interestUsers]).slice(0, 10);
-
-      const topCountryUsers = [...processedUsers]
-          .sort((a,b) => b.matchScore - a.matchScore)
-          .slice(0, 100);
-      const randomCountryMatches = shuffleArray(topCountryUsers).slice(0, 10);
-
-      const sections = {
-        soulmates: randomSoulmates,
-        freshFaces: randomFreshFaces,
-        cityMatches: randomCityMatches,
-        interestMatches: randomInterestMatches,
-        countryMatches: randomCountryMatches
-      };
-
-      return res.status(200).json({
-        userPlan: userPlan,
-        mode: "overview",
-        sections: sections 
-      });
+        return res.status(200).json({ userPlan, mode: "overview", sections });
     }
 
   } catch (err) {
-    console.error(err);
+    console.error("Explore Error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
 
-// ==========================================
-// ✅ آپدیت شده: اضافه شدن Insights به جزئیات کاربر
-// ==========================================
 export const getUserDetails = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -155,20 +144,15 @@ export const getUserDetails = async (req, res) => {
 
     const me = await User.findById(currentUserId);
     
-    // محاسبه امتیاز
     const score = calculateCompatibility(me, targetUser);
-    
-    // محاسبه DNA
     const dna = calculateUserDNA(targetUser);
-
-    // ✅ تولید تحلیل هوشمند (Insights)
     const insights = generateMatchInsights(me, targetUser);
 
     res.status(200).json({
       ...targetUser.toObject(),
       matchScore: score,
       dna: dna,
-      insights: insights // حالا فرانت می‌تواند این را هم نمایش دهد
+      insights: insights 
     });
   } catch (err) {
     res.status(500).json({ message: "Server error" ,err});

@@ -4,6 +4,7 @@ import cloudinary from "../../config/cloudinary.js";
 import { Resend } from "resend"; 
 import crypto from "crypto";
 import { getPasswordResetTemplate } from "../../templates/emailTemplates.js";
+import { calculateUserDNA } from "../../utils/matchUtils.js";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -53,7 +54,7 @@ export const getUserById = async (req, res) => {
 export const getUserInformation = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select(
-      "name username avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro"
+      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
@@ -229,7 +230,7 @@ export const updateCategoryAnswers = async (req, res) => {
         user.questionsbycategoriesResults.categories = new Map();
     }
 
-    // پشتیبانی از هر دو فرمت دیتای قدیمی و جدید
+    // ذخیره جواب‌ها
     if (quizResults) {
        const grouped = quizResults.reduce((acc, curr) => {
          if (!acc[curr.category]) acc[curr.category] = [];
@@ -244,8 +245,15 @@ export const updateCategoryAnswers = async (req, res) => {
        user.questionsbycategoriesResults.categories.set(categoryName, answers);
     }
 
+    // ✅ 2. محاسبه و آپدیت DNA قبل از ذخیره
+const newDNA = calculateUserDNA(user, true);   
+    user.dna = newDNA;
+
     await user.save();
-    res.status(200).json(user.questionsbycategoriesResults);
+    res.status(200).json({ 
+        questionsResults: user.questionsbycategoriesResults, 
+        dna: newDNA // ارسال DNA جدید به فرانت
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });

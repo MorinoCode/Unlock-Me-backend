@@ -3,15 +3,12 @@ import User from "../models/User.js";
 import cron from "node-cron";
 
 // تنظیمات
-const BATCH_SIZE = 50; // برای سرور رایگان/ارزان، تعداد را کم کن که فشار نیاید
+const BATCH_SIZE = 50; 
 let isRunning = false;
 
 console.log("✅ Match Worker loaded and scheduled.");
 
-// ============================================================
-// زمان‌بندی: هر ۴ ساعت یکبار (برای صرفه‌جویی در منابع سرور اصلی)
-// فرمت: "0 */4 * * *"
-// ============================================================
+// زمان‌بندی: هر ۴ ساعت
 cron.schedule("0 */4 * * *", async () => {
   if (isRunning) {
     console.log("⚠️ Previous matching job still running. Skipping.");
@@ -36,14 +33,14 @@ async function processAllUsers() {
   let totalProcessed = 0;
 
   while (hasMoreUsers) {
-    // فقط ۵۰ تا ۵۰ تا پردازش می‌کنیم تا رم سرور اصلی پر نشود
+    // یوزرها را همراه با علایق‌شان (interests) لود می‌کنیم
     const usersBatch = await User.find({
       $or: [
         { lastMatchCalculation: { $exists: false } },
         { lastMatchCalculation: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
       ]
     })
-    .select("dna location lookingFor name")
+    .select("dna location lookingFor name interests") // ✅ interests اضافه شد
     .limit(BATCH_SIZE);
 
     if (usersBatch.length === 0) {
@@ -51,40 +48,42 @@ async function processAllUsers() {
       break;
     }
 
-    // پردازش موازی
     await Promise.all(usersBatch.map(user => findMatchesForUser(user).catch(err => 
         console.error(`Error on user ${user._id}:`, err.message)
     )));
 
     totalProcessed += usersBatch.length;
-    
-    // ۱ ثانیه استراحت بین هر ۵۰ نفر تا CPU سرور اصلی نفس بکشد و API کند نشود
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
 }
 
 async function findMatchesForUser(currentUser) {
-    if (!currentUser.location || !currentUser.location.country) {
-      // فقط تاریخ را آپدیت می‌کنیم که دوباره در لوپ بعدی نیاید
+  if (!currentUser.location || !currentUser.location.country) {
       await User.updateOne({ _id: currentUser._id }, { lastMatchCalculation: new Date() });
       return;
   }
+
   const myDNA = currentUser.dna || { Logic: 50, Emotion: 50, Energy: 50, Creativity: 50, Discipline: 50 };
   
+  // ✅ علایق کاربر جاری (برای مقایسه در دیتابیس)
+  const myInterests = currentUser.interests || [];
+
   let genderFilter = {};
-  if (currentUser.lookingFor) {
-genderFilter = { gender: { $regex: new RegExp(`^${currentUser.lookingFor}$`, "i") } };  }
+  if (currentUser.lookingFor && currentUser.lookingFor !== 'everyone') {
+     genderFilter = { gender: { $regex: new RegExp(`^${currentUser.lookingFor}$`, "i") } }; 
+  }
 
   const matches = await User.aggregate([
     {
       $match: {
         _id: { $ne: currentUser._id },
-        "location.country": currentUser.location?.country,
+        "location.country": currentUser.location.country, 
         ...genderFilter
       }
     },
     {
       $addFields: {
+        // 1. محاسبه اختلاف DNA
         dnaDiff: {
           $add: [
             { $abs: { $subtract: ["$dna.Logic", myDNA.Logic] } },
@@ -94,21 +93,39 @@ genderFilter = { gender: { $regex: new RegExp(`^${currentUser.lookingFor}$`, "i"
             { $abs: { $subtract: ["$dna.Discipline", myDNA.Discipline] } }
           ]
         },
+        // 2. محاسبه امتیاز شهر
         cityBonus: {
           $cond: { 
-             if: { $eq: [{ $toLower: "$location.city" }, { $toLower: currentUser.location?.city || "" }] }, 
+             if: { $eq: [{ $toLower: "$location.city" }, { $toLower: currentUser.location.city || "" }] }, 
              then: 15, 
              else: 0 
           }
+        },
+        // 3. ✅ محاسبه امتیاز علایق مشترک (جدید)
+        // از دستور $setIntersection استفاده می‌کنیم تا ببینیم چند علاقه مشترک دارند
+        sharedInterestsCount: {
+            $size: { 
+                $setIntersection: ["$interests", myInterests] 
+            }
         }
       }
     },
     {
       $addFields: {
+        // محاسبه امتیاز علایق: (تعداد مشترک * ۳) ولی ماکسیمم ۱۵
+        interestBonus: {
+            $min: [{ $multiply: ["$sharedInterestsCount", 3] }, 15]
+        }
+      }
+    },
+    {
+      $addFields: {
+        // 4. فرمول نهایی: (DNA + City + Interests)
         matchScore: {
           $add: [
             { $multiply: [ { $subtract: [500, "$dnaDiff"] }, 0.14 ] }, 
-            "$cityBonus"
+            "$cityBonus",
+            "$interestBonus" // ✅ اضافه شد به جمع کل
           ]
         }
       }
@@ -125,7 +142,7 @@ genderFilter = { gender: { $regex: new RegExp(`^${currentUser.lookingFor}$`, "i"
 
   const formattedMatches = matches.map(m => ({
     user: m._id,
-    matchScore: Math.round(m.matchScore),
+    matchScore: Math.round(m.matchScore), // رند کردن نهایی
     updatedAt: new Date()
   }));
 

@@ -67,7 +67,6 @@ async function findMatchesForUser(currentUser) {
 
   const myDNA = currentUser.dna || { Logic: 50, Emotion: 50, Energy: 50, Creativity: 50, Discipline: 50 };
   
-  // ✅ علایق کاربر جاری (برای مقایسه در دیتابیس)
   const myInterests = currentUser.interests || [];
 
   let genderFilter = {};

@@ -9,9 +9,8 @@ let isRunning = false;
 console.log("✅ Match Worker loaded and scheduled.");
 
 // زمان‌بندی: هر ۴ ساعت
-"*/1 * * * *"
-// "0 */4 * * *"
-cron.schedule("*/1 * * * *", async () => {
+
+cron.schedule("0 */4 * * *", async () => {
   if (isRunning) {
     console.log("⚠️ Previous matching job still running. Skipping.");
     return;
@@ -57,6 +56,7 @@ async function processAllUsers() {
     totalProcessed += usersBatch.length;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
+  
 }
 
 async function findMatchesForUser(currentUser) {
@@ -67,7 +67,6 @@ async function findMatchesForUser(currentUser) {
 
   const myDNA = currentUser.dna || { Logic: 50, Emotion: 50, Energy: 50, Creativity: 50, Discipline: 50 };
   
-  // ✅ علایق کاربر جاری (برای مقایسه در دیتابیس)
   const myInterests = currentUser.interests || [];
 
   let genderFilter = {};
@@ -133,7 +132,7 @@ async function findMatchesForUser(currentUser) {
       }
     },
     { $sort: { matchScore: -1 } },
-    { $limit: 100 },
+    { $limit: 300 },
     {
       $project: {
         _id: 1, 

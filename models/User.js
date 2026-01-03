@@ -127,5 +127,14 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// ✅ 1. ایندکس برای جستجوی لوکیشن (برای Nearby و فیلتر کشور)
+userSchema.index({ "location.country": 1, "location.city": 1 });
+
+// ✅ 2. ایندکس برای پیدا کردن جدیدترین‌ها (برای Newest)
+userSchema.index({ "location.country": 1, createdAt: -1 });
+
+// ✅ 3. ایندکس برای فیلتر جنسیت (ترکیبی با کشور)
+userSchema.index({ "location.country": 1, gender: 1 });
+
 const User = mongoose.model("User", userSchema);
 export default User;

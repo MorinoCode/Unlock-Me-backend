@@ -19,6 +19,7 @@ import notificationRoutes from "./routes/notificationRoutes.js";
 import { addToQueue } from "./utils/blindDateService.js";
 import BlindSession from "./models/BlindSession.js";
 import BlindQuestion from "./models/BlindQuestion.js";
+import "./workers/matchWorker.js";
 
 dotenv.config();
 const app = express();

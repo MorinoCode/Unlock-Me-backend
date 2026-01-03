@@ -113,6 +113,16 @@ const userSchema = new mongoose.Schema(
     Creativity: { type: Number, default: 50 },
     Discipline: { type: Number, default: 50 }
   },
+  potentialMatches: [
+    {
+      user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      matchScore: Number, // امتیار را هم ذخیره می‌کنیم که بعداً راحت سورت کنیم
+      updatedAt: { type: Date, default: Date.now }
+    }
+  ],
+
+  // یک تاریخ که بدانیم آخرین بار کی برای این یوزر مچ پیدا کردیم
+  lastMatchCalculation: { type: Date, default: null }
   },
   { timestamps: true }
 );

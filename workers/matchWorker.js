@@ -9,7 +9,9 @@ let isRunning = false;
 console.log("✅ Match Worker loaded and scheduled.");
 
 // زمان‌بندی: هر ۴ ساعت
-cron.schedule("0 */4 * * *", async () => {
+"*/1 * * * *"
+// "0 */4 * * *"
+cron.schedule("*/1 * * * *", async () => {
   if (isRunning) {
     console.log("⚠️ Previous matching job still running. Skipping.");
     return;

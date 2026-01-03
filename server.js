@@ -234,6 +234,9 @@ app.use("/api/locations", locationRoutes);
 app.use("/api/reports", reportRoutes);
 app.use('/api/posts', postRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.get("/ping", (req, res) => {
+  res.status(200).send("pong 🏓");
+});
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {

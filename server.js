@@ -19,6 +19,7 @@ import notificationRoutes from "./routes/notificationRoutes.js";
 import { addToQueue } from "./utils/blindDateService.js";
 import BlindSession from "./models/BlindSession.js";
 import BlindQuestion from "./models/BlindQuestion.js";
+import "./workers/matchWorker.js";
 
 dotenv.config();
 const app = express();
@@ -106,7 +107,6 @@ io.on("connection", (socket) => {
       socket.userId = id;
       socket.join(id);
       userSocketMap.set(id, socket.id);
-      console.log(`User ${id} joined via join_room.`);
     }
   });
 

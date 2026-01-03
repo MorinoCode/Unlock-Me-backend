@@ -106,6 +106,23 @@ const userSchema = new mongoose.Schema(
       validate: [arrayLimit, "{PATH} exceeds the limit of 6"],
     },
     voiceIntro: { type: String, default: "" },
+    dna: {
+    Logic: { type: Number, default: 50 },
+    Emotion: { type: Number, default: 50 },
+    Energy: { type: Number, default: 50 },
+    Creativity: { type: Number, default: 50 },
+    Discipline: { type: Number, default: 50 }
+  },
+  potentialMatches: [
+    {
+      user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      matchScore: Number, // امتیار را هم ذخیره می‌کنیم که بعداً راحت سورت کنیم
+      updatedAt: { type: Date, default: Date.now }
+    }
+  ],
+
+  // یک تاریخ که بدانیم آخرین بار کی برای این یوزر مچ پیدا کردیم
+  lastMatchCalculation: { type: Date, default: null }
   },
   { timestamps: true }
 );

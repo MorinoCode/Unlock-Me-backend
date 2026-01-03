@@ -235,6 +235,7 @@ app.use("/api/reports", reportRoutes);
 app.use('/api/posts', postRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.get("/ping", (req, res) => {
+  console.log(`🔔 Ping received at ${new Date().toISOString()}`); // ✅ این خط را اضافه کن
   res.status(200).send("pong 🏓");
 });
 

@@ -4,6 +4,7 @@ import { protect } from "../middleware/auth.js";
 import { getUserDetails, getUserLocation } from "../controllers/explore/explore.js";
 import { getMatchesDashboard, handleDislike, handleLike } from "../controllers/userActions/userActions.js";
 import { 
+  forgotPassword,
   getUserById, 
   getUserInformation, 
   updateCategoryAnswers, 
@@ -21,6 +22,7 @@ const router = express.Router();
 router.post("/signin",authLimiter, signinUser);
 router.post("/signup",authLimiter, signupUser);
 router.post("/signout",authLimiter, signoutUser);
+router.post("/forgot-password",authLimiter, forgotPassword);
 
 router.get("/location", protect, getUserLocation);
 router.get("/getUserInformation", protect, getUserInformation);

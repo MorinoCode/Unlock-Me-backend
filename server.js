@@ -101,6 +101,32 @@ io.on("connection", (socket) => {
     console.log(`User ${userId} connected and joined room.`);
   }
 
+  socket.on('confirm_instructions', async ({ sessionId }) => {
+    try {
+      const session = await BlindSession.findById(sessionId);
+      if (!session) return;
+
+      const isUser1 = session.participants[0].toString() === socket.userId;
+      
+      if (isUser1) session.stageProgress.u1InstructionRead = true;
+      else session.stageProgress.u2InstructionRead = true;
+
+      // اگر هر دو نفر تایید کردند، بازی شروع شود
+      if (session.stageProgress.u1InstructionRead && session.stageProgress.u2InstructionRead) {
+        session.status = 'active'; // تغییر وضعیت به اکتیو
+        session.currentStage = 1;
+      }
+
+      await session.save();
+      
+      // آپدیت برای هر دو طرف
+      const updatedSession = await BlindSession.findById(sessionId).populate('questions.questionId');
+      io.to(session.participants[0].toString()).emit('session_update', updatedSession);
+      io.to(session.participants[1].toString()).emit('session_update', updatedSession);
+      
+    } catch (err) { console.error(err); }
+  });
+
   // این ایونت را نگه دارید اما منطق تکراری را حذف کنید
   socket.on("join_room", (id) => {
     if (!socket.userId) {
@@ -134,6 +160,7 @@ io.on("connection", (socket) => {
     }
   });
 
+  // ✅ FIX: لاجیک این قسمت کاملاً اصلاح شد تا برای مرحله ۲ هم کار کند
   socket.on('submit_blind_answer', async ({ sessionId, choiceIndex }) => {
     try {
       const session = await BlindSession.findById(sessionId);
@@ -143,12 +170,30 @@ io.on("connection", (socket) => {
       const isUser2 = session.participants[1].toString() === socket.userId;
 
       const currentQ = session.questions[session.currentQuestionIndex];
+      
+      // ثبت جواب
       if (isUser1 && currentQ.u1Answer === null) currentQ.u1Answer = choiceIndex;
       else if (isUser2 && currentQ.u2Answer === null) currentQ.u2Answer = choiceIndex;
 
+      // بررسی اینکه آیا هر دو نفر جواب داده‌اند؟
       if (currentQ.u1Answer !== null && currentQ.u2Answer !== null) {
-        if (session.currentQuestionIndex < 4) session.currentQuestionIndex += 1;
-        else session.status = 'waiting_for_stage_2';
+        
+        // محاسبه حد نهایی سوالات فعلی
+        // اگر استیج ۱ باشیم، طول آرایه ۵ است (ایندکس ۰ تا ۴)
+        // اگر استیج ۲ باشیم، طول آرایه ۱۰ شده است (ایندکس ۰ تا ۹)
+        const maxIndex = session.questions.length - 1;
+
+        if (session.currentQuestionIndex < maxIndex) {
+            // هنوز سوال باقی مانده، برو بعدی
+            session.currentQuestionIndex += 1;
+        } else {
+            // سوالات تمام شده، برو به ویتینگ روم مربوطه
+            if (session.currentStage === 1) {
+                session.status = 'waiting_for_stage_2';
+            } else if (session.currentStage === 2) {
+                session.status = 'waiting_for_stage_3';
+            }
+        }
       }
 
       await session.save();
@@ -165,27 +210,49 @@ io.on("connection", (socket) => {
     try {
       const session = await BlindSession.findById(sessionId);
       if (!session) return;
-      const isUser1 = session.participants[0].toString() === socket.userId;
-      if (isUser1) session.u1ReadyForNext = true;
-      else session.u2ReadyForNext = true;
 
-      if (session.u1ReadyForNext && session.u2ReadyForNext) {
+      const isUser1 = session.participants[0].toString() === socket.userId;
+      
+      if (isUser1) session.stageProgress.u1ReadyNext = true;
+      else session.stageProgress.u2ReadyNext = true;
+
+      // بررسی اینکه آیا هر دو نفر آماده هستند؟
+      if (session.stageProgress.u1ReadyNext && session.stageProgress.u2ReadyNext) {
+        
         session.currentStage += 1;
         session.status = 'active';
-        session.currentQuestionIndex = 0;
-        session.u1ReadyForNext = false;
-        session.u2ReadyForNext = false;
+        
+        // ✅ FIX: ایندکس را یکی جلو می‌بریم تا از سوال آخرِ مرحله قبل، بپرد روی سوال اولِ مرحله جدید
+        // مثال: مرحله ۱ روی ایندکس ۴ تمام شد. الان می‌شود ۵ (شروع مرحله ۲)
+        session.currentQuestionIndex += 1;
+        
+        session.stageProgress.u1ReadyNext = false;
+        session.stageProgress.u2ReadyNext = false;
 
-        const nextQuestions = await BlindQuestion.aggregate([{ $match: { stage: session.currentStage } }, { $sample: { size: 5 } }]);
-        if (nextQuestions.length > 0) {
-          session.questions = nextQuestions.map(q => ({ questionId: q._id, u1Answer: null, u2Answer: null }));
+        // اگر وارد مرحله ۲ شدیم، سوالات مرحله ۲ را لود کن و به ته لیست اضافه کن
+        if (session.currentStage === 2) {
+           const nextQuestions = await BlindQuestion.aggregate([
+              { $match: { stage: 2 } }, 
+              { $sample: { size: 5 } }
+           ]);
+           
+           const newQs = nextQuestions.map(q => ({
+              questionId: q._id,
+              u1Answer: null, // این‌ها نال هستند و قفل نمی‌شوند
+              u2Answer: null
+           }));
+           
+           session.questions.push(...newQs);
         }
       }
+
       await session.save();
+      
       const updatedSession = await BlindSession.findById(sessionId).populate('questions.questionId');
       io.to(session.participants[0].toString()).emit('session_update', updatedSession);
       io.to(session.participants[1].toString()).emit('session_update', updatedSession);
-    } catch (err) { console.error(err); }
+      
+    } catch (err) { console.error("Proceed Error:", err); }
   });
 
   socket.on('send_blind_message', async ({ sessionId, text }) => {
@@ -204,13 +271,37 @@ io.on("connection", (socket) => {
     try {
       const session = await BlindSession.findById(sessionId);
       if (!session) return;
-      if (session.participants[0].toString() === socket.userId) session.u1RevealDecision = decision;
-      else session.u2RevealDecision = decision;
-      if (session.u1RevealDecision !== 'pending' && session.u2RevealDecision !== 'pending') session.status = 'completed';
+
+      // 1. ثبت تصمیم کاربر
+      if (session.participants[0].toString() === socket.userId) {
+         session.u1RevealDecision = decision;
+      } else {
+         session.u2RevealDecision = decision;
+      }
+
+      // 2. بررسی اینکه آیا هر دو نفر تصمیم گرفته‌اند؟
+      if (session.u1RevealDecision !== 'pending' && session.u2RevealDecision !== 'pending') {
+        
+        // ✅ FIX: لاجیک شرطی برای موفقیت یا شکست
+        if (session.u1RevealDecision === 'yes' && session.u2RevealDecision === 'yes') {
+            // هر دو بله گفتند -> موفقیت
+            session.status = 'completed'; 
+        } else {
+            // حداقل یک نفر نه گفته -> شکست
+            session.status = 'cancelled';
+        }
+      }
+
       await session.save();
-      const updatedSession = await BlindSession.findById(sessionId).populate('participants', 'name avatar').populate('questions.questionId');
+      
+      // آپدیت برای فرانت‌اند (با populate کردن شرکت‌کننده‌ها برای حالت completed)
+      const updatedSession = await BlindSession.findById(sessionId)
+        .populate('participants', 'name avatar') // فقط اگر completed باشد این‌ها دیده می‌شوند
+        .populate('questions.questionId');
+
       io.to(session.participants[0].toString()).emit('session_update', updatedSession);
       io.to(session.participants[1].toString()).emit('session_update', updatedSession);
+      
     } catch (err) { console.error(err); }
   });
 

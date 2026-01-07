@@ -5,6 +5,9 @@ import { Resend } from "resend";
 import crypto from "crypto";
 import { getPasswordResetTemplate } from "../../templates/emailTemplates.js";
 import { calculateUserDNA } from "../../utils/matchUtils.js";
+import Conversation from "../../models/Conversation.js"
+import Message from "../../models/Message.js";
+import Post from "../../models/Post.js"
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -301,13 +304,7 @@ export const forgotPassword = async (req, res) => {
   }
 };
 
-// controllers/userController/userController.js
 
-// ... keep all your existing imports and helper functions ...
-import Post from "../../models/Post.js";
-// Import your Message/Chat models here if they exist
-// import Message from "../../models/Message.js"; 
-// import Chat from "../../models/Chat.js";
 
 export const deleteAccount = async (req, res) => {
   try {
@@ -349,12 +346,12 @@ export const deleteAccount = async (req, res) => {
     // Adjust collection names if they differ in your project
     try {
       // Delete messages sent or received by user
-      const Message = mongoose.model("Message"); 
+      
       await Message.deleteMany({ $or: [{ sender: userId }, { receiver: userId }] });
 
       // Delete chats where user is a participant
-      const Chat = mongoose.model("Chat");
-      await Chat.deleteMany({ participants: { $in: [userId] } });
+      
+      await Conversation.deleteMany({ participants: { $in: [userId] } });
     } catch (e) {
       console.log("Chat/Message models not initialized yet, skipping...");
     }

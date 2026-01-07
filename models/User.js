@@ -28,10 +28,7 @@ const userSchema = new mongoose.Schema(
       year: String,
     },
 
-    location: {
-      country: { type: String, default: "" },
-      city: { type: String, default: "" },
-    },
+   
     bio: {
       type: String,
       maxlength: 150,
@@ -120,6 +117,19 @@ const userSchema = new mongoose.Schema(
       updatedAt: { type: Date, default: Date.now }
     }
   ],
+  location: {
+      type: {
+        type: String,
+        enum: ["Point"], // فقط مقدار Point مجاز است
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        default: [0, 0], // مقدار پیش‌فرض
+      },
+      country: { type: String, default: "" },
+      city: { type: String, default: "" },
+    },
 
   // یک تاریخ که بدانیم آخرین بار کی برای این یوزر مچ پیدا کردیم
   lastMatchCalculation: { type: Date, default: null }
@@ -135,6 +145,8 @@ userSchema.index({ "location.country": 1, createdAt: -1 });
 
 // ✅ 3. ایندکس برای فیلتر جنسیت (ترکیبی با کشور)
 userSchema.index({ "location.country": 1, gender: 1 });
+
+userSchema.index({ "location": "2dsphere" });
 
 const User = mongoose.model("User", userSchema);
 export default User;

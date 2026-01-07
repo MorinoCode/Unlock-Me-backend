@@ -5,6 +5,9 @@ import { Resend } from "resend";
 import crypto from "crypto";
 import { getPasswordResetTemplate } from "../../templates/emailTemplates.js";
 import { calculateUserDNA } from "../../utils/matchUtils.js";
+import Conversation from "../../models/Conversation.js"
+import Message from "../../models/Message.js";
+import Post from "../../models/Post.js"
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -297,6 +300,86 @@ export const forgotPassword = async (req, res) => {
 
   } catch (error) {
     console.error("Forgot Password Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+
+export const deleteAccount = async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+
+    // 1. Find the user to get file URLs
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // 2. WIPE CLOUDINARY FILES
+    // Delete Avatar
+    if (user.avatar && !user.avatar.includes("default-avatar")) {
+      await deleteFromCloudinary(user.avatar);
+    }
+
+    // Delete Voice Intro
+    if (user.voiceIntro) {
+      await deleteFromCloudinary(user.voiceIntro);
+    }
+
+    // Delete Gallery Images
+    if (user.gallery && user.gallery.length > 0) {
+      for (const imgUrl of user.gallery) {
+        await deleteFromCloudinary(imgUrl);
+      }
+    }
+
+    // 3. WIPE POSTS & POST IMAGES
+    const userPosts = await Post.find({ author: userId });
+    for (const post of userPosts) {
+      if (post.image) {
+        // Posts are stored in 'unlock_me_posts' folder per your cloudinary.js
+        await deleteFromCloudinary(post.image);
+      }
+    }
+    await Post.deleteMany({ author: userId });
+
+    // 4. WIPE MESSAGES & CHATS
+    // Adjust collection names if they differ in your project
+    try {
+      // Delete messages sent or received by user
+      
+      await Message.deleteMany({ $or: [{ sender: userId }, { receiver: userId }] });
+
+      // Delete chats where user is a participant
+      
+      await Conversation.deleteMany({ participants: { $in: [userId] } });
+    } catch (e) {
+      console.log("Chat/Message models not initialized yet, skipping...");
+    }
+
+    // 5. REMOVE USER FROM OTHER USERS' LISTS (Likes/Matches)
+    await User.updateMany(
+      {},
+      {
+        $pull: {
+          likedUsers: userId,
+          likedBy: userId,
+          dislikedUsers: userId,
+          superLikedUsers: userId,
+          superLikedBy: userId,
+          "potentialMatches": { user: userId }
+        }
+      }
+    );
+
+    // 6. DELETE THE USER RECORD
+    await User.findByIdAndDelete(userId);
+
+    // 7. CLEAR SESSION/COOKIE
+    res.clearCookie("unlock-me-token"); // Adjust if your cookie name is different
+
+    res.status(200).json({ message: "Account and all associated data permanently deleted." });
+  } catch (error) {
+    console.error("Delete account error:", error);
     res.status(500).json({ error: error.message });
   }
 };

@@ -4,6 +4,7 @@ import { protect } from "../middleware/auth.js";
 import { getUserDetails, getUserLocation } from "../controllers/explore/explore.js";
 import { getMatchesDashboard, handleDislike, handleLike } from "../controllers/userActions/userActions.js";
 import { 
+  deleteAccount,
   forgotPassword,
   getUserById, 
   getUserInformation, 
@@ -39,5 +40,7 @@ router.put("/profile/info", protect, updateProfileInfo);
 router.put("/profile/password", protect, updatePassword);
 router.put("/profile/gallery", protect, updateGallery);
 router.put("/profile/categories", protect, updateCategoryAnswers);
+router.delete("/profile/delete-account", protect, deleteAccount); 
+
 
 export default router;

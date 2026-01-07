@@ -28,10 +28,7 @@ const userSchema = new mongoose.Schema(
       year: String,
     },
 
-    location: {
-      country: { type: String, default: "" },
-      city: { type: String, default: "" },
-    },
+   
     bio: {
       type: String,
       maxlength: 150,

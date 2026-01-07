@@ -57,7 +57,7 @@ export const getUserById = async (req, res) => {
 export const getUserInformation = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select(
-      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro"
+      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro likedBy likedUsers dislikedUsers superLikedUsers"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);

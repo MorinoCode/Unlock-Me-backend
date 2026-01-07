@@ -26,13 +26,17 @@ export const addComment = async (req, res) => {
     });
 
     const savedComment = await newComment.save();
+
+    // ✅ UPDATE: Increment comment count in Post model
+    post.commentCount = (post.commentCount || 0) + 1;
+    await post.save();
+
     const populatedComment = await Comment.findById(savedComment._id).populate('author', 'name avatar');
 
     if (post.author.toString() !== user._id.toString()) {
-      // آپدیت شده: اضافه شدن senderId
       await emitNotification(io, post.author, {
         type: "NEW_COMMENT",
-        senderId: user._id, // هدایت به پروفایل کامنت‌گذار
+        senderId: user._id,
         senderName: user.name,
         senderAvatar: user.avatar,
         message: `commented: "${content.substring(0, 30)}..."`,
@@ -40,8 +44,14 @@ export const addComment = async (req, res) => {
       });
     }
 
-    res.status(201).json(populatedComment);
+    // Return the comment AND the new count so frontend can update immediately if needed
+    res.status(201).json({
+       ...populatedComment.toObject(),
+       newPostCommentCount: post.commentCount 
+    });
+
   } catch (error) {
+    console.error("Add Comment Error:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -77,7 +87,15 @@ export const deleteComment = async (req, res) => {
       return res.status(403).json({ message: "Not authorized to delete this comment" });
     }
 
+    // ✅ UPDATE: Decrement comment count in Post model
+    // Using $inc ensures we don't need to fetch the post again just to save it
+    // We also ensure it doesn't go below 0 (though unlikely)
+    await Post.findByIdAndUpdate(comment.post._id, { 
+        $inc: { commentCount: -1 } 
+    });
+
     await comment.deleteOne();
+    
     res.status(200).json({ message: "Comment deleted successfully" });
   } catch (error) {
     console.error("Delete Comment Error:", error);

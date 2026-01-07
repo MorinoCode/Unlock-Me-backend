@@ -177,16 +177,28 @@ export const saveUserInterestCategoriesQuestinsAnswer = async (req, res) => {
 
 export const saveLocation = async (req, res) => {
   try {
-    const { country, city } = req.body;
-    if (!country || !city) {
+    const { location } = req.body;
+
+    // اعتبارسنجی پایه برای وجود شهر و کشور در بدنه ارسالی
+    if (!location || !location.country || !location.city) {
       return res.status(400).json({ message: "Country and City are required" });
     }
 
-    await User.findByIdAndUpdate(req.user.userId, {
-      location: { country, city }
-    });
+    // به‌روزرسانی کل آبجکت لوکیشن (شامل type, coordinates, country, city)
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.userId,
+      { $set: { location: location } },
+      { new: true, runValidators: true }
+    );
 
-    res.status(200).json({ message: "Location saved successfully" });
+    if (!updatedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json({ 
+      message: "Location saved successfully", 
+      location: updatedUser.location 
+    });
   } catch (err) {
     console.error("Error saving location:", err);
     res.status(500).json({ message: "Server error" });

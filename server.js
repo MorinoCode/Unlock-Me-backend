@@ -16,6 +16,8 @@ import locationRoutes from "./routes/locationRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import postRoutes from "./routes/postRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import webhookRoutes from "./routes/webhookRoutes.js";
+import paymentRoutes from "./routes/paymentRoutes.js";
 import { addToQueue } from "./utils/blindDateService.js";
 import BlindSession from "./models/BlindSession.js";
 import BlindQuestion from "./models/BlindQuestion.js";
@@ -56,6 +58,8 @@ const corsOptions = {
   },
   credentials: true,
 };
+
+app.use('/api/webhook', webhookRoutes);
 
 // Middlewares
 app.use(cors(corsOptions));
@@ -325,6 +329,7 @@ app.use("/api/locations", locationRoutes);
 app.use("/api/reports", reportRoutes);
 app.use('/api/posts', postRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use('/api/payment', paymentRoutes);
 app.get("/ping", (req, res) => {
   res.status(200).send("pong 🏓");
 });

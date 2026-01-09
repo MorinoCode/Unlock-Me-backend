@@ -15,8 +15,11 @@ import swipeRoutes from "./routes/swipeRoutes.js";
 import locationRoutes from "./routes/locationRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import postRoutes from "./routes/postRoutes.js";
+import blindDateRoutes from "./routes/blindDateRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
-import { addToQueue } from "./utils/blindDateService.js";
+import webhookRoutes from "./routes/webhookRoutes.js";
+import paymentRoutes from "./routes/paymentRoutes.js";
+// import { addToQueue } from "./utils/blindDateService.js"; // ❌ Removed
 import BlindSession from "./models/BlindSession.js";
 import BlindQuestion from "./models/BlindQuestion.js";
 import "./workers/matchWorker.js";
@@ -30,6 +33,9 @@ const server = http.createServer(app);
 // Map to store active user IDs and their corresponding socket IDs for notifications
 const userSocketMap = new Map(); 
 
+// ✅ New Queue for Blind Date
+let blindQueue = []; 
+
 // Exporting this to be used in controllers to find online users
 export const getReceiverSocketId = (receiverId) => {
   return userSocketMap.get(receiverId);
@@ -40,8 +46,8 @@ const corsOptions = {
     const allowedOrigins = [
       "http://localhost:5173",
       "https://unlock-me-frontend.vercel.app",
-      "https://unlock-me.app",      // دامین اصلی
-      "https://www.unlock-me.app",  // ساب‌دامین www (محض اطمینان)
+      "https://unlock-me.app",      
+      "https://www.unlock-me.app",  
     ];
     if (
       !origin ||
@@ -50,12 +56,14 @@ const corsOptions = {
     ) {
       callback(null, true);
     } else {
-      console.log("Blocked by CORS:", origin); // لاگ برای دیباگ
+      console.log("Blocked by CORS:", origin);
       callback(new Error("CORS policy violation"), false);
     }
   },
   credentials: true,
 };
+
+app.use('/api/webhook', webhookRoutes);
 
 // Middlewares
 app.use(cors(corsOptions));
@@ -88,18 +96,147 @@ const io = new Server(server, {
   },
 });
 
-// Attach io to app to access it in routes/controllers via req.app.get("io")
 app.set("io", io);
+
+// ✅ DEBUG MATCHING LOGIC
+const findMatch = (user1) => {
+  console.log(`\n🔍 --- START MATCHING FOR: ${user1.userId} ---`);
+  console.log(`   User1 Details: Gender=${user1.criteria.gender}, LookingFor=${user1.criteria.lookingFor}, Country=${user1.criteria.location?.country}`);
+
+  return blindQueue.find((user2) => {
+    console.log(`   👀 Comparing with User inside Queue: ${user2.userId}`);
+    
+    // 1. Self Match Check
+    if (user1.userId === user2.userId) {
+        console.log("      ❌ Skipped: Same User ID");
+        return false;
+    }
+
+    // 2. Country Check
+    const c1 = user1.criteria.location?.country || "Unknown";
+    const c2 = user2.criteria.location?.country || "Unknown";
+    
+    const countryMatch = c1.trim().toLowerCase() === c2.trim().toLowerCase();
+    
+    if (!countryMatch) {
+        console.log(`      ❌ Country Mismatch: '${c1}' vs '${c2}'`);
+        return false;
+    }
+
+    // 3. Gender Check
+    const u1Gender = user1.criteria.gender?.toLowerCase() || 'unknown';
+    const u1Looking = user1.criteria.lookingFor?.toLowerCase() || 'all';
+    
+    const u2Gender = user2.criteria.gender?.toLowerCase() || 'unknown';
+    const u2Looking = user2.criteria.lookingFor?.toLowerCase() || 'all';
+
+    console.log(`      ⚖️ Logic Check:`);
+    console.log(`         User1 (${u1Gender}) looking for (${u1Looking}) -> Wants User2 (${u2Gender})?`);
+    console.log(`         User2 (${u2Gender}) looking for (${u2Looking}) -> Wants User1 (${u1Gender})?`);
+
+    // شرط ۱: جنسیت کاربر ۲ باید با خواسته کاربر ۱ بخواند
+    const match1 = u1Looking === 'all' || u1Looking === u2Gender;
+    
+    // شرط ۲: جنسیت کاربر ۱ باید با خواسته کاربر ۲ بخواند
+    const match2 = u2Looking === 'all' || u2Looking === u1Gender;
+
+    if (!match1) console.log(`      ❌ User1 REJECTED User2 (Gender mismatch)`);
+    if (!match2) console.log(`      ❌ User2 REJECTED User1 (Gender mismatch)`);
+
+    if (match1 && match2) {
+        console.log("      ✅✅ MATCH FOUND!");
+        return true;
+    } 
+    return false;
+  });
+};
 
 io.on("connection", (socket) => {
   const userId = socket.handshake.query.userId;
   
   if (userId && userId !== "undefined") {
-    socket.userId = userId; // حتماً ذخیره شود برای دیسکانکت
+    socket.userId = userId; 
     socket.join(userId); 
-    userSocketMap.set(userId, socket.id); // اضافه کردن به مپ به محض اتصال
+    userSocketMap.set(userId, socket.id); 
     console.log(`User ${userId} connected and joined room.`);
   }
+
+  // --- BLIND DATE MATCHING LOGIC ---
+  socket.on("join_blind_queue", async (data) => {
+    const currentUserId = socket.userId || data.userId;
+    if (!currentUserId) {
+        console.error("No User ID found for blind queue");
+        return;
+    }
+
+    const currentUser = {
+      socketId: socket.id,
+      userId: currentUserId,
+      criteria: data.criteria || {}
+    };
+
+    console.log(`User ${currentUserId} joining queue...`);
+
+    // Try to find a match in the queue
+    const match = findMatch(currentUser);
+
+    if (match) {
+      console.log(`Match Found! ${currentUser.userId} + ${match.userId}`);
+      
+      // Remove matched user from queue
+      blindQueue = blindQueue.filter(u => u.userId !== match.userId);
+
+      // Create Session
+      try {
+        const questionsStage1 = await BlindQuestion.aggregate([
+          { $match: { stage: 1 } },
+          { $sample: { size: 5 } },
+        ]);
+
+        const formattedQuestions = questionsStage1.map(q => ({
+          questionId: q._id,
+          u1Answer: null,
+          u2Answer: null
+        }));
+
+        const newSession = new BlindSession({
+          participants: [currentUser.userId, match.userId],
+          status: 'instructions', 
+          currentStage: 1,
+          questions: formattedQuestions,
+          startTime: new Date(),
+        });
+
+        await newSession.save();
+
+        const populatedSession = await BlindSession.findById(newSession._id)
+            .populate('questions.questionId');
+
+        // Notify both users
+        io.to(currentUser.userId).emit("match_found", populatedSession);
+        io.to(match.userId).emit("match_found", populatedSession);
+
+      } catch (err) {
+        console.error("Error creating blind session:", err);
+      }
+
+    } else {
+      // No match found -> Add to queue
+      // Prevent duplicates
+      const exists = blindQueue.find(u => u.userId === currentUserId);
+      if (!exists) {
+          blindQueue.push(currentUser);
+          console.log("User added to queue. Waiting...");
+      } else {
+          console.log("User already in queue.");
+      }
+    }
+  });
+
+  // --- Handle Disconnect from Queue ---
+  socket.on("leave_blind_queue", () => {
+      blindQueue = blindQueue.filter(u => u.socketId !== socket.id);
+  });
 
   socket.on('confirm_instructions', async ({ sessionId }) => {
     try {
@@ -111,15 +248,13 @@ io.on("connection", (socket) => {
       if (isUser1) session.stageProgress.u1InstructionRead = true;
       else session.stageProgress.u2InstructionRead = true;
 
-      // اگر هر دو نفر تایید کردند، بازی شروع شود
       if (session.stageProgress.u1InstructionRead && session.stageProgress.u2InstructionRead) {
-        session.status = 'active'; // تغییر وضعیت به اکتیو
+        session.status = 'active'; 
         session.currentStage = 1;
       }
 
       await session.save();
       
-      // آپدیت برای هر دو طرف
       const updatedSession = await BlindSession.findById(sessionId).populate('questions.questionId');
       io.to(session.participants[0].toString()).emit('session_update', updatedSession);
       io.to(session.participants[1].toString()).emit('session_update', updatedSession);
@@ -127,7 +262,6 @@ io.on("connection", (socket) => {
     } catch (err) { console.error(err); }
   });
 
-  // این ایونت را نگه دارید اما منطق تکراری را حذف کنید
   socket.on("join_room", (id) => {
     if (!socket.userId) {
       socket.userId = id;
@@ -136,7 +270,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Chat typing events
   socket.on("typing", ({ receiverId, senderId }) => {
     io.to(receiverId).emit("display_typing", { senderId });
   });
@@ -145,22 +278,6 @@ io.on("connection", (socket) => {
     io.to(receiverId).emit("hide_typing");
   });
 
-  // Blind Date logic preserved and untouched
-  socket.on("join_blind_queue", async (data) => {
-    const currentUserId = socket.userId || data.userId;
-    if (!currentUserId) return;
-
-    const result = await addToQueue(currentUserId, data.criteria);
-    if (result.status === "matched") {
-      const session = result.session;
-      const roomId = `blind_${session._id}`;
-      socket.join(roomId);
-      io.to(session.participants[0]._id.toString()).emit("match_found", session);
-      io.to(session.participants[1]._id.toString()).emit("match_found", session);
-    }
-  });
-
-  // ✅ FIX: لاجیک این قسمت کاملاً اصلاح شد تا برای مرحله ۲ هم کار کند
   socket.on('submit_blind_answer', async ({ sessionId, choiceIndex }) => {
     try {
       const session = await BlindSession.findById(sessionId);
@@ -171,23 +288,15 @@ io.on("connection", (socket) => {
 
       const currentQ = session.questions[session.currentQuestionIndex];
       
-      // ثبت جواب
       if (isUser1 && currentQ.u1Answer === null) currentQ.u1Answer = choiceIndex;
       else if (isUser2 && currentQ.u2Answer === null) currentQ.u2Answer = choiceIndex;
 
-      // بررسی اینکه آیا هر دو نفر جواب داده‌اند؟
       if (currentQ.u1Answer !== null && currentQ.u2Answer !== null) {
-        
-        // محاسبه حد نهایی سوالات فعلی
-        // اگر استیج ۱ باشیم، طول آرایه ۵ است (ایندکس ۰ تا ۴)
-        // اگر استیج ۲ باشیم، طول آرایه ۱۰ شده است (ایندکس ۰ تا ۹)
         const maxIndex = session.questions.length - 1;
 
         if (session.currentQuestionIndex < maxIndex) {
-            // هنوز سوال باقی مانده، برو بعدی
             session.currentQuestionIndex += 1;
         } else {
-            // سوالات تمام شده، برو به ویتینگ روم مربوطه
             if (session.currentStage === 1) {
                 session.status = 'waiting_for_stage_2';
             } else if (session.currentStage === 2) {
@@ -216,20 +325,14 @@ io.on("connection", (socket) => {
       if (isUser1) session.stageProgress.u1ReadyNext = true;
       else session.stageProgress.u2ReadyNext = true;
 
-      // بررسی اینکه آیا هر دو نفر آماده هستند؟
       if (session.stageProgress.u1ReadyNext && session.stageProgress.u2ReadyNext) {
-        
         session.currentStage += 1;
         session.status = 'active';
-        
-        // ✅ FIX: ایندکس را یکی جلو می‌بریم تا از سوال آخرِ مرحله قبل، بپرد روی سوال اولِ مرحله جدید
-        // مثال: مرحله ۱ روی ایندکس ۴ تمام شد. الان می‌شود ۵ (شروع مرحله ۲)
         session.currentQuestionIndex += 1;
         
         session.stageProgress.u1ReadyNext = false;
         session.stageProgress.u2ReadyNext = false;
 
-        // اگر وارد مرحله ۲ شدیم، سوالات مرحله ۲ را لود کن و به ته لیست اضافه کن
         if (session.currentStage === 2) {
            const nextQuestions = await BlindQuestion.aggregate([
               { $match: { stage: 2 } }, 
@@ -238,7 +341,7 @@ io.on("connection", (socket) => {
            
            const newQs = nextQuestions.map(q => ({
               questionId: q._id,
-              u1Answer: null, // این‌ها نال هستند و قفل نمی‌شوند
+              u1Answer: null,
               u2Answer: null
            }));
            
@@ -272,31 +375,24 @@ io.on("connection", (socket) => {
       const session = await BlindSession.findById(sessionId);
       if (!session) return;
 
-      // 1. ثبت تصمیم کاربر
       if (session.participants[0].toString() === socket.userId) {
          session.u1RevealDecision = decision;
       } else {
          session.u2RevealDecision = decision;
       }
 
-      // 2. بررسی اینکه آیا هر دو نفر تصمیم گرفته‌اند؟
       if (session.u1RevealDecision !== 'pending' && session.u2RevealDecision !== 'pending') {
-        
-        // ✅ FIX: لاجیک شرطی برای موفقیت یا شکست
         if (session.u1RevealDecision === 'yes' && session.u2RevealDecision === 'yes') {
-            // هر دو بله گفتند -> موفقیت
             session.status = 'completed'; 
         } else {
-            // حداقل یک نفر نه گفته -> شکست
             session.status = 'cancelled';
         }
       }
 
       await session.save();
       
-      // آپدیت برای فرانت‌اند (با populate کردن شرکت‌کننده‌ها برای حالت completed)
       const updatedSession = await BlindSession.findById(sessionId)
-        .populate('participants', 'name avatar') // فقط اگر completed باشد این‌ها دیده می‌شوند
+        .populate('participants', 'name avatar')
         .populate('questions.questionId');
 
       io.to(session.participants[0].toString()).emit('session_update', updatedSession);
@@ -307,7 +403,10 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     if (socket.userId) {
-      userSocketMap.delete(socket.userId); // Cleanup online users map
+      // ✅ Cleanup from Blind Queue
+      blindQueue = blindQueue.filter(u => u.socketId !== socket.id);
+      
+      userSocketMap.delete(socket.userId);
       console.log(`User ${socket.userId} disconnected.`);
     }
   });
@@ -325,6 +424,8 @@ app.use("/api/locations", locationRoutes);
 app.use("/api/reports", reportRoutes);
 app.use('/api/posts', postRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use('/api/payment', paymentRoutes);
+app.use('/api/blind-date', blindDateRoutes);
 app.get("/ping", (req, res) => {
   res.status(200).send("pong 🏓");
 });

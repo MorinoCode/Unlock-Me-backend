@@ -5,42 +5,43 @@ import { Resend } from "resend";
 import crypto from "crypto";
 import { getPasswordResetTemplate } from "../../templates/emailTemplates.js";
 import { calculateUserDNA } from "../../utils/matchUtils.js";
-import Conversation from "../../models/Conversation.js"
+import Conversation from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
-import Post from "../../models/Post.js"
+import Post from "../../models/Post.js";
+import { getMatchListLimit } from "../../utils/matchUtils.js";
+
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// --- تابع کمکی برای پاک کردن فایل از Cloudinary ---
-// این تابع URL فایل را می‌گیرد و آن را از سرورهای کلودینری حذف می‌کند
+// --- Helper: Delete file from Cloudinary ---
+// Extracts public ID from URL including folder name
 const deleteFromCloudinary = async (url) => {
   if (!url) return;
   
   try {
-    // استخراج Public ID از URL
-    // مثال URL: https://res.cloudinary.com/.../unlock_me_gallery/abc12345.jpg
-    // ما نیاز داریم به: unlock_me_gallery/abc12345
+    // Example URL: https://res.cloudinary.com/cloudname/image/upload/v164000/folder_name/filename.jpg
+    // We need: folder_name/filename
     
-    const regex = /\/([^/]+)\/([^/]+)\.[^.]+$/; // گرفتن نام پوشه و نام فایل
-    const match = url.match(regex);
+    // Split the URL by segments
+    const parts = url.split('/');
+    const filenameWithExt = parts.pop();
+    const folder = parts.pop(); // Assumes the folder is immediately before the filename
+    const filename = filenameWithExt.split('.')[0];
     
-    if (match) {
-      const folder = match[1];
-      const filename = match[2];
-      const publicId = `${folder}/${filename}`;
-      
-      // تشخیص نوع فایل (ویس یا عکس)
-      const resourceType = url.includes("/video/") ? "video" : "image";
+    // Construct Public ID
+    const publicId = `${folder}/${filename}`;
+    
+    // Determine resource type
+    const resourceType = url.includes("/video/") ? "video" : "image";
 
-      await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
-      console.log(`Deleted from Cloudinary: ${publicId}`);
-    }
+    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+    console.log(`Deleted from Cloudinary: ${publicId}`);
   } catch (error) {
     console.error("Error deleting file from Cloudinary:", error);
   }
 };
 
-// --- دریافت اطلاعات کاربر دیگر (Public) ---
+// --- Get Public User Info ---
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.userId).select(
@@ -53,11 +54,11 @@ export const getUserById = async (req, res) => {
   }
 };
 
-// --- دریافت اطلاعات خود کاربر (Private) ---
+// --- Get Current User Info (Private) ---
 export const getUserInformation = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select(
-      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro likedBy likedUsers dislikedUsers superLikedUsers"
+      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro likedBy likedUsers dislikedUsers superLikedUsers superLikedBy usage"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
@@ -66,11 +67,11 @@ export const getUserInformation = async (req, res) => {
   }
 };
 
-// --- آپدیت پروفایل (شامل آواتار و ویس) ---
+// --- Update Profile (Avatar & Voice) ---
 export const updateProfileInfo = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
-    // یافتن کاربر فعلی برای دسترسی به اطلاعات قدیمی (جهت حذف)
+    // Find current user to access old data for deletion
     const currentUser = await User.findById(userId);
     if (!currentUser) return res.status(404).json({ message: "User not found" });
 
@@ -85,9 +86,9 @@ export const updateProfileInfo = async (req, res) => {
       gender, lookingFor, birthday,
     };
 
-    // ۱. مدیریت آواتار
+    // 1. Handle Avatar
     if (avatar && avatar.startsWith("data:image")) {
-      // اگر آواتار جدید است، آواتار قبلی را پاک کن (اگر دیفالت نباشد)
+      // Delete old avatar if it's not the default
       if (currentUser.avatar && !currentUser.avatar.includes("default-avatar")) {
          await deleteFromCloudinary(currentUser.avatar);
       }
@@ -99,16 +100,16 @@ export const updateProfileInfo = async (req, res) => {
         });
         updateData.avatar = uploadRes.secure_url;
       } catch (err) {
-        console.log(err);
+        console.error(err);
         return res.status(500).json({ message: "Avatar upload failed" });
       }
     } else if (avatar) {
       updateData.avatar = avatar;
     }
 
-    // ۲. مدیریت ویس (Voice Intro) - اصلاح شده برای حذف و جایگزینی
+    // 2. Handle Voice Intro
     if (voiceIntro && voiceIntro.startsWith("data:audio")) {
-      // اگر ویس جدید است، ویس قبلی را پاک کن
+      // Delete old voice if exists
       if (currentUser.voiceIntro) {
         await deleteFromCloudinary(currentUser.voiceIntro);
       }
@@ -126,7 +127,7 @@ export const updateProfileInfo = async (req, res) => {
         return res.status(500).json({ message: "Voice upload failed" });
       }
     } else if (voiceIntro === "") {
-      // اگر کاربر دکمه حذف ویس را زده باشد
+      // User explicitly removed voice
       if (currentUser.voiceIntro) {
         await deleteFromCloudinary(currentUser.voiceIntro);
       }
@@ -146,7 +147,7 @@ export const updateProfileInfo = async (req, res) => {
   }
 };
 
-// --- تغییر رمز عبور ---
+// --- Update Password ---
 export const updatePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -166,10 +167,10 @@ export const updatePassword = async (req, res) => {
   }
 };
 
-// --- آپدیت گالری (حذف عکس‌های پاک شده + آپلود عکس‌های جدید) ---
+// --- Update Gallery ---
 export const updateGallery = async (req, res) => {
   try {
-    const { images } = req.body; // این آرایه‌ی جدید است که از فرانت می‌آید
+    const { images } = req.body; // New array from frontend
     const userId = req.user.userId || req.user.id;
 
     if (!Array.isArray(images) || images.length > 6) {
@@ -179,16 +180,16 @@ export const updateGallery = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // الف) پیدا کردن عکس‌های حذف شده
-    // هر عکسی که در دیتابیس هست ولی در آرایه جدید (images) نیست، یعنی حذف شده
+    // A) Identify deleted images
+    // Any image in DB not present in new 'images' array is considered deleted
     const imagesToDelete = user.gallery.filter(oldImg => !images.includes(oldImg));
 
-    // ب) حذف عکس‌های حذف شده از Cloudinary
+    // B) Remove deleted images from Cloudinary
     for (const imgUrl of imagesToDelete) {
       await deleteFromCloudinary(imgUrl);
     }
 
-    // ج) آپلود عکس‌های جدید (که به صورت Base64 هستند)
+    // C) Upload new images (Base64)
     const processedImages = await Promise.all(
       images.map(async (img) => {
         if (img.startsWith("data:image")) {
@@ -203,12 +204,12 @@ export const updateGallery = async (req, res) => {
             throw new Error("Failed to upload gallery image");
           }
         }
-        // اگر لینک قدیمی است، دست نزن
+        // If it's an existing URL, keep it
         return img;
       })
     );
 
-    // د) ذخیره آرایه نهایی در دیتابیس
+    // D) Save final array
     user.gallery = processedImages;
     await user.save();
 
@@ -218,7 +219,7 @@ export const updateGallery = async (req, res) => {
   }
 };
 
-// --- آپدیت علایق ---
+// --- Update Interests / DNA ---
 export const updateCategoryAnswers = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
@@ -233,7 +234,7 @@ export const updateCategoryAnswers = async (req, res) => {
         user.questionsbycategoriesResults.categories = new Map();
     }
 
-    // ذخیره جواب‌ها
+    // Save answers
     if (quizResults) {
        const grouped = quizResults.reduce((acc, curr) => {
          if (!acc[curr.category]) acc[curr.category] = [];
@@ -248,14 +249,14 @@ export const updateCategoryAnswers = async (req, res) => {
        user.questionsbycategoriesResults.categories.set(categoryName, answers);
     }
 
-    // ✅ 2. محاسبه و آپدیت DNA قبل از ذخیره
-const newDNA = calculateUserDNA(user, true);   
+    // Recalculate and update DNA
+    const newDNA = calculateUserDNA(user, true);   
     user.dna = newDNA;
 
     await user.save();
     res.status(200).json({ 
         questionsResults: user.questionsbycategoriesResults, 
-        dna: newDNA // ارسال DNA جدید به فرانت
+        dna: newDNA 
     });
   } catch (error) {
     console.error(error);
@@ -263,14 +264,16 @@ const newDNA = calculateUserDNA(user, true);
   }
 };
 
+// --- Forgot Password ---
 export const forgotPassword = async (req, res) => {
   try {
     let { email } = req.body;
+    if (!email) return res.status(400).json({ message: "Email is required" });
+    
     email = email.toLowerCase().trim();
 
     const user = await User.findOne({ email });
     if (!user) {
-     
       return res.status(404).json({ message: "User not found" });
     }
 
@@ -304,8 +307,7 @@ export const forgotPassword = async (req, res) => {
   }
 };
 
-
-
+// --- Delete Account ---
 export const deleteAccount = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
@@ -336,24 +338,21 @@ export const deleteAccount = async (req, res) => {
     const userPosts = await Post.find({ author: userId });
     for (const post of userPosts) {
       if (post.image) {
-        // Posts are stored in 'unlock_me_posts' folder per your cloudinary.js
+        // Posts are stored in 'unlock_me_posts' folder or similar
         await deleteFromCloudinary(post.image);
       }
     }
     await Post.deleteMany({ author: userId });
 
     // 4. WIPE MESSAGES & CHATS
-    // Adjust collection names if they differ in your project
     try {
       // Delete messages sent or received by user
-      
       await Message.deleteMany({ $or: [{ sender: userId }, { receiver: userId }] });
 
       // Delete chats where user is a participant
-      
       await Conversation.deleteMany({ participants: { $in: [userId] } });
     } catch (e) {
-      console.log("Chat/Message models not initialized yet, skipping...");
+      console.log("Chat/Message cleanup error or models missing:", e);
     }
 
     // 5. REMOVE USER FROM OTHER USERS' LISTS (Likes/Matches)
@@ -375,11 +374,98 @@ export const deleteAccount = async (req, res) => {
     await User.findByIdAndDelete(userId);
 
     // 7. CLEAR SESSION/COOKIE
-    res.clearCookie("unlock-me-token"); // Adjust if your cookie name is different
+    res.clearCookie("unlock-me-token"); 
 
     res.status(200).json({ message: "Account and all associated data permanently deleted." });
   } catch (error) {
     console.error("Delete account error:", error);
     res.status(500).json({ error: error.message });
+  }
+};
+
+// --- Matches Dashboard (Updated Logic) ---
+export const getMatchesDashboard = async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+    const me = await User.findById(currentUserId)
+        .select("likedUsers superLikedUsers likedBy superLikedBy subscription matches");
+        console.log(me);
+
+    if (!me) return res.status(404).json({ message: "User not found" });
+
+    // 1. Get Plan & Limits
+    const userPlan = me.subscription?.plan || "free";
+    // محدودیت تعداد برای Incoming (کسانی که من را لایک کردند)
+    const incomingLimit = getMatchListLimit(userPlan, 'incoming'); 
+    
+    // 2. Helper to populate user details
+    // فقط فیلدهای ضروری را می‌گیریم
+    const populateFields = "name avatar matchScore isVerified birthday location"; 
+
+    // --- A. MUTUAL MATCHES ---
+    // (کسانی که هم من لایک کردم هم آنها من را)
+    // برای مچ‌های دوطرفه معمولاً محدودیتی نیست یا خیلی بالاست
+    const mutualIds = me.matches || []; // فرض بر این است که مچ‌ها در فیلد matches ذخیره می‌شوند
+    // اگر فیلد matches نداری، باید محاسبه کنی:
+    // const mutualIds = me.likedUsers.filter(id => me.likedBy.includes(id));
+    
+    const mutualMatches = await User.find({ _id: { $in: mutualIds } })
+        .select(populateFields)
+        .lean();
+        console.log(mutualMatches);
+
+    // --- B. SENT LIKES ---
+    // (کسانی که من لایک کردم)
+    const sentIds = [...(me.likedUsers || []), ...(me.superLikedUsers || [])];
+    const sentLikes = await User.find({ _id: { $in: sentIds } })
+        .select(populateFields)
+        .lean();
+
+    // --- C. INCOMING LIKES (The Important Part!) ---
+    // (کسانی که من را لایک کردند اما من هنوز لایک نکردم)
+    const incomingIds = [...(me.likedBy || []), ...(me.superLikedBy || [])].filter(
+        id => !mutualIds.includes(id.toString()) // حذف کسانی که مچ شده‌اند
+    );
+
+    const rawIncoming = await User.find({ _id: { $in: incomingIds } })
+        .select(populateFields)
+        .lean();
+
+    // ✅ اعمال محدودیت روی Incoming Likes
+    // اگر لیمیت بی‌نهایت بود (گلد/پلاتینیوم) -> همه را نشان بده
+    // اگر لیمیت 0 بود (رایگان) -> همه را قفل کن
+    // اگر لیمیت عدد بود -> تعداد مشخصی باز، بقیه قفل
+    
+    const processedIncoming = rawIncoming.map((user, index) => {
+        let isLocked = false;
+
+        if (incomingLimit === Infinity) {
+            isLocked = false;
+        } else if (incomingLimit === 0) {
+            isLocked = true; // همه قفل برای کاربر رایگان
+        } else {
+            // مثلاً لیمیت ۵ است، ۵ تای اول باز، بقیه قفل
+            isLocked = index >= incomingLimit;
+        }
+
+        // اگر قفل بود، اسم و آواتار را مخدوش کن (اختیاری، ولی isLocked: true کافیست)
+        return {
+            ...user,
+            isLocked: isLocked,
+            // اگر خیلی محکم‌کاری می‌خواهی، وقتی قفل است آواتار نفرست:
+            // avatar: isLocked ? null : user.avatar 
+        };
+    });
+
+    res.status(200).json({
+        mutualMatches,
+        sentLikes,
+        incomingLikes: processedIncoming, // لیست پردازش شده
+        userPlan
+    });
+
+  } catch (error) {
+    console.error("Dashboard Error:", error);
+    res.status(500).json({ message: "Server error" });
   }
 };

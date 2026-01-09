@@ -14,218 +14,147 @@ export const escapeRegex = (text) => {
 export const PLANS = {
   FREE: "free",
   GOLD: "gold",
-  PREMIUM: "premium",
+  PLATINUM: "platinum",
 };
 
+// Helper to normalize plan string
+const normalizePlan = (plan) => {
+    const p = plan?.toLowerCase() || PLANS.FREE;
+    if (p.includes("platinum") || p.includes("premium")) return PLANS.PLATINUM;
+    if (p.includes("gold")) return PLANS.GOLD;
+    return PLANS.FREE;
+};
+
+// --- VISIBILITY LIMITS ---
 export const getVisibilityThreshold = (plan) => {
-  const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
-  switch (normalizedPlan) {
-    case PLANS.PREMIUM:
-    case "platinum":
-      return 100;
-    case PLANS.GOLD:
-      return 90;
-    case PLANS.FREE:
-    default:
-      return 80;
+  const p = normalizePlan(plan);
+  switch (p) {
+    case PLANS.PLATINUM: return 100;
+    case PLANS.GOLD: return 90;
+    default: return 80;
   }
 };
 
+// --- SOULMATE PERMISSIONS ---
 export const getSoulmatePermissions = (plan) => {
-  const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
-  switch (normalizedPlan) {
-    case PLANS.PREMIUM:
-    case "platinum":
-      return { isLocked: false, limit: Infinity };
-    case PLANS.GOLD:
-      return { isLocked: false, limit: 5 };
-    default:
-      return { isLocked: true, limit: 0 };
+  const p = normalizePlan(plan);
+  switch (p) {
+    case PLANS.PLATINUM: return { isLocked: false, limit: Infinity };
+    case PLANS.GOLD: return { isLocked: false, limit: 5 };
+    default: return { isLocked: true, limit: 0 };
   }
 };
 
+// --- SWIPE LIMITS ---
+export const getSwipeLimit = (plan) => {
+  const p = normalizePlan(plan);
+  switch (p) {
+    case PLANS.PLATINUM: return Infinity;
+    case PLANS.GOLD: return 80;
+    default: return 30;
+  }
+};
+
+// --- SUPER LIKE LIMITS ---
+export const getSuperLikeLimit = (plan) => {
+  const p = normalizePlan(plan);
+  switch (p) {
+    case PLANS.PLATINUM: return Infinity;
+    case PLANS.GOLD: return 5;
+    default: return 1;
+  }
+};
+
+// --- DM LIMITS ---
+export const getDailyDmLimit = (plan) => {
+  const p = normalizePlan(plan);
+  switch (p) {
+    case PLANS.PLATINUM: return 10;
+    case PLANS.GOLD: return 5;
+    default: return 0;
+  }
+};
+
+// --- BLIND DATE CONFIG ---
+export const getBlindDateConfig = (plan) => {
+  const p = normalizePlan(plan);
+  switch (p) {
+    case PLANS.PLATINUM: return { limit: Infinity, cooldownHours: 0 };
+    case PLANS.GOLD: return { limit: 4, cooldownHours: 1 };
+    default: return { limit: 2, cooldownHours: 4 };
+  }
+};
+
+// --- MATCH LIST LIMITS ---
+export const getMatchListLimit = (plan, type) => {
+  const p = normalizePlan(plan);
+  
+  if (type === 'mutual') return Infinity; 
+
+  if (type === 'incoming') { // Who liked you
+    switch (p) {
+      case PLANS.PLATINUM:
+      case PLANS.GOLD:
+        return Infinity; 
+      default:
+        return 0; // Locked for free users
+    }
+  }
+
+  if (type === 'sent') { // Who you liked
+    switch (p) {
+      case PLANS.PLATINUM: return Infinity;
+      case PLANS.GOLD: return 50; 
+      default: return 10;
+    }
+  }
+  return 0;
+};
+
+// --- PROMO BANNERS ---
 export const getPromoBannerConfig = (plan) => {
-  const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
-  switch (normalizedPlan) {
-    case PLANS.PREMIUM:
-    case "platinum":
-      return { showGold: false, showPlatinum: false, showBoost: true };
-    case PLANS.GOLD:
-      return { showGold: false, showPlatinum: true, showBoost: true };
-    default:
-      return { showGold: true, showPlatinum: true, showBoost: true };
+  const p = normalizePlan(plan);
+  switch (p) {
+    case PLANS.PLATINUM: return { showGold: false, showPlatinum: false, showBoost: true };
+    case PLANS.GOLD: return { showGold: false, showPlatinum: true, showBoost: true };
+    default: return { showGold: true, showPlatinum: true, showBoost: true };
   }
 };
 
 // ==========================================
-// 3. Data Mappings
+// 3. Data Mappings (Traits)
 // ==========================================
 const TRAIT_MAPPING = {
-  Solver: "Logic",
-  Analytical: "Logic",
-  Rational: "Logic",
-  Thinker: "Logic",
-  Scientific: "Logic",
-  Pragmatist: "Logic",
-  Optimizer: "Logic",
-  Determinist: "Logic",
-  Technical: "Logic",
-  Objective: "Logic",
-  Critical: "Logic",
-
-  Feeler: "Emotion",
-  Empathetic: "Emotion",
-  Sensitive: "Emotion",
-  Romantic: "Emotion",
-  Nurturing: "Emotion",
-  Humanist: "Emotion",
-  Peacekeeper: "Emotion",
-  Emotional: "Emotion",
-  Sentimental: "Emotion",
-  Kind: "Emotion",
-  Compassionate: "Emotion",
-
-  Active: "Energy",
-  Energetic: "Energy",
-  Extrovert: "Energy",
-  Social: "Energy",
-  Adventurous: "Energy",
-  "Risk Taker": "Energy",
-  Spontaneous: "Energy",
-  Playful: "Energy",
-  Leader: "Energy",
-  Outgoing: "Energy",
-
-  Creator: "Creativity",
-  Artist: "Creativity",
-  Creative: "Creativity",
-  Visual: "Creativity",
-  Storyteller: "Creativity",
-  Abstract: "Creativity",
-  Dreamer: "Creativity",
-  "Open-minded": "Creativity",
-  Innovator: "Creativity",
-
-  Planner: "Discipline",
-  Organized: "Discipline",
-  Disciplined: "Discipline",
-  Perfectionist: "Discipline",
-  Efficient: "Discipline",
-  Conservative: "Discipline",
-  Stable: "Discipline",
-  Reliable: "Discipline",
-  Completionist: "Discipline",
-  Structured: "Discipline",
-  "Detail-oriented": "Discipline",
+  Solver: "Logic", Analytical: "Logic", Rational: "Logic", Thinker: "Logic", Scientific: "Logic", Pragmatist: "Logic", Optimizer: "Logic", Determinist: "Logic", Technical: "Logic", Objective: "Logic", Critical: "Logic",
+  Feeler: "Emotion", Empathetic: "Emotion", Sensitive: "Emotion", Romantic: "Emotion", Nurturing: "Emotion", Humanist: "Emotion", Peacekeeper: "Emotion", Emotional: "Emotion", Sentimental: "Emotion", Kind: "Emotion", Compassionate: "Emotion",
+  Active: "Energy", Energetic: "Energy", Extrovert: "Energy", Social: "Energy", Adventurous: "Energy", "Risk Taker": "Energy", Spontaneous: "Energy", Playful: "Energy", Leader: "Energy", Outgoing: "Energy",
+  Creator: "Creativity", Artist: "Creativity", Creative: "Creativity", Visual: "Creativity", Storyteller: "Creativity", Abstract: "Creativity", Dreamer: "Creativity", "Open-minded": "Creativity", Innovator: "Creativity",
+  Planner: "Discipline", Organized: "Discipline", Disciplined: "Discipline", Perfectionist: "Discipline", Efficient: "Discipline", Conservative: "Discipline", Stable: "Discipline", Reliable: "Discipline", Completionist: "Discipline", Structured: "Discipline", "Detail-oriented": "Discipline",
 };
 
 const INSIGHT_TEMPLATES = {
-  Logic: {
-    high_high: {
-      title: "🧠 The Masterminds",
-      description: "You both approach life with logic and facts.",
-      tip: "Don't forget feelings.",
-    },
-    low_low: {
-      title: "❤️ Heart-Led Connection",
-      description: "Neither of you overthinks things.",
-      tip: "Pause and plan sometimes.",
-    },
-    diff: {
-      title: "⚖️ The Anchor & The Sail",
-      description: "One analyzes, the other feels.",
-      tip: "Listen without fixing.",
-    },
-  },
-  Emotion: {
-    high_high: {
-      title: "🌊 Soulmate Energy",
-      description: "A deeply emotional bond.",
-      tip: "Set boundaries.",
-    },
-    low_low: {
-      title: "🛡️ The Chill Duo",
-      description: "No drama here.",
-      tip: "Check in on each other.",
-    },
-    diff: {
-      title: "🔥 Warmth meets Stability",
-      description: "One brings depth, the other stability.",
-      tip: "Respect the difference.",
-    },
-  },
-  Energy: {
-    high_high: {
-      title: "🚀 The Power Couple",
-      description: "Unstoppable energy.",
-      tip: "Avoid burnout.",
-    },
-    low_low: {
-      title: "🏡 Sanctuary Vibes",
-      description: "Home is your happy place.",
-      tip: "Go out sometimes.",
-    },
-    diff: {
-      title: "⚡ The Spark & The Home",
-      description: "One pulls the other out; one recharges the other.",
-      tip: "Compromise on outings.",
-    },
-  },
-  Creativity: {
-    high_high: {
-      title: "🎨 The Dreamers",
-      description: "Full of imagination.",
-      tip: "Who pays the bills?",
-    },
-    low_low: {
-      title: "🧱 The Realists",
-      description: "Grounded and sensible.",
-      tip: "Try something new.",
-    },
-    diff: {
-      title: "🎈 The Kite & The String",
-      description: "Visionary meets builder.",
-      tip: "Ideas need execution.",
-    },
-  },
-  Discipline: {
-    high_high: {
-      title: "🏆 The Empire Builders",
-      description: "Organized and ambitious.",
-      tip: "Learn to relax.",
-    },
-    low_low: {
-      title: "🍃 The Bohemians",
-      description: "Stress-free and spontaneous.",
-      tip: "Set auto-pay for bills.",
-    },
-    diff: {
-      title: "🌪️ Structure meets Chaos",
-      description: "Plan meets surprise.",
-      tip: "Don't nag; respect order.",
-    },
-  },
+  Logic: { high_high: { title: "🧠 The Masterminds", description: "You both approach life with logic and facts.", tip: "Don't forget feelings." }, low_low: { title: "❤️ Heart-Led Connection", description: "Neither of you overthinks things.", tip: "Pause and plan sometimes." }, diff: { title: "⚖️ The Anchor & The Sail", description: "One analyzes, the other feels.", tip: "Listen without fixing." } },
+  Emotion: { high_high: { title: "🌊 Soulmate Energy", description: "A deeply emotional bond.", tip: "Set boundaries." }, low_low: { title: "🛡️ The Chill Duo", description: "No drama here.", tip: "Check in on each other." }, diff: { title: "🔥 Warmth meets Stability", description: "One brings depth, the other stability.", tip: "Respect the difference." } },
+  Energy: { high_high: { title: "🚀 The Power Couple", description: "Unstoppable energy.", tip: "Avoid burnout." }, low_low: { title: "🏡 Sanctuary Vibes", description: "Home is your happy place.", tip: "Go out sometimes." }, diff: { title: "⚡ The Spark & The Home", description: "One pulls the other out; one recharges the other.", tip: "Compromise on outings." } },
+  Creativity: { high_high: { title: "🎨 The Dreamers", description: "Full of imagination.", tip: "Who pays the bills?" }, low_low: { title: "🧱 The Realists", description: "Grounded and sensible.", tip: "Try something new." }, diff: { title: "🎈 The Kite & The String", description: "Visionary meets builder.", tip: "Ideas need execution." } },
+  Discipline: { high_high: { title: "🏆 The Empire Builders", description: "Organized and ambitious.", tip: "Learn to relax." }, low_low: { title: "🍃 The Bohemians", description: "Stress-free and spontaneous.", tip: "Set auto-pay for bills." }, diff: { title: "🌪️ Structure meets Chaos", description: "Plan meets surprise.", tip: "Don't nag; respect order." } },
 };
 
 // ==========================================
 // 4. Core Calculation Functions
 // ==========================================
 const DEFAULT_DNA = { Logic: 50, Emotion: 50, Energy: 50, Creativity: 50, Discipline: 50 };
+
 export const calculateUserDNA = (user, forceRecalculate = false) => {
-  
-  // 1. حالت خواندن سریع (Explore Mode) 🚀
+  // 1. Fast Read Mode
   if (!forceRecalculate) {
-      // اگر در دیتابیس موجود بود، همان را بده
       if (user && user.dna && typeof user.dna === 'object' && 'Logic' in user.dna) {
           return user.dna;
       }
-      // اگر نبود، محاسبه نکن! فقط دیفالت بده (Safety Return)
       return DEFAULT_DNA;
   }
 
-  // 2. حالت محاسبه سنگین (Update Profile Mode) 🏗️
-  // (فقط وقتی اجرا می‌شود که forceRecalculate = true باشد)
-  
+  // 2. Calculation Mode
   const dna = { Logic: 0, Emotion: 0, Energy: 0, Creativity: 0, Discipline: 0 };
   let totalTraitsFound = 0;
 
@@ -234,7 +163,6 @@ export const calculateUserDNA = (user, forceRecalculate = false) => {
   const rawCategories = user.questionsbycategoriesResults.categories;
   let results = [];
 
-  // هندل کردن انواع دیتا (Array, Map, Object)
   if (rawCategories) {
     if (Array.isArray(rawCategories)) {
       results = rawCategories;
@@ -253,7 +181,6 @@ export const calculateUserDNA = (user, forceRecalculate = false) => {
   }
 
   results.forEach(item => {
-    // ... (همان منطق قبلی برای پیدا کردن trait) ...
     let traitName = item.trait;
     if (!traitName && item.questions && Array.isArray(item.questions)) {
        item.questions.forEach(q => {
@@ -301,7 +228,6 @@ export const calculateCompatibility = (me, other) => {
 
   let baseScore = 0;
 
-  // فیکس: تریم کردن نام شهرها
   const myCity = me.location?.city ? me.location.city.trim().toLowerCase() : "";
   const otherCity = other.location?.city ? other.location.city.trim().toLowerCase() : "";
 

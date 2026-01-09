@@ -1,56 +1,79 @@
 import Stripe from 'stripe';
 import dotenv from 'dotenv';
+import User from '../../models/User.js'; // مدل یوزر را ایمپورت کنید (برای اطمینان)
+
 dotenv.config();
 
-// اتصال به استرایپ با کلید مخفی (Secret Key)
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+// ✅ 1. تابع جدید: دریافت لیست پلن‌ها از استرایپ برای نمایش در فرانت‌اند
+export const getSubscriptionPlans = async (req, res) => {
+  try {
+    // دریافت تمام قیمت‌های فعال از استرایپ + اطلاعات محصول مرتبط
+    const prices = await stripe.prices.list({
+      active: true,
+      expand: ['data.product'], // برای دسترسی به نام محصول (Gold/Platinum)
+    });
+
+    // مرتب‌سازی و ساده‌سازی داده‌ها برای ارسال به فرانت‌اند
+    const plans = prices.data.map((price) => ({
+      id: price.id,                 // Price ID (مثلاً price_12345)
+      nickname: price.nickname,     // نام بازه (Monthly/Yearly)
+      amount: price.unit_amount / 100, // تبدیل سنت به دلار (مثلاً 999 -> 9.99)
+      currency: price.currency,
+      interval: price.recurring?.interval, // month یا year
+      productName: price.product.name,     // نام محصول (Gold Member, Platinum)
+      // اگر در داشبورد استرایپ برای محصول Metadata ست کرده باشید، اینجا می‌آید
+      features: price.product.metadata.features 
+        ? JSON.parse(price.product.metadata.features) 
+        : [], 
+    }));
+
+    res.status(200).json(plans);
+  } catch (error) {
+    console.error("Stripe Fetch Error:", error);
+    res.status(500).json({ error: "Failed to fetch plans from Stripe" });
+  }
+};
+
+// ✅ 2. تابع اصلاح شده: ساخت لینک پرداخت با Price ID دریافتی
 export const createCheckoutSession = async (req, res) => {
   try {
-    const { plan } = req.body;
-    // فرض بر این است که میدل‌ور احراز هویت (Auth Middleware) آیدی کاربر را در req.user گذاشته است
-    const userId = req.user._id; 
+    // ✅ تغییر: گرفتن planName از بدنه درخواست
+    const { priceId, planName } = req.body; 
+    const userId = req.user._id;
 
-    // امنیت: چک می‌کنیم پلن درخواستی معتبر باشد
-    if (!['gold', 'platinum'].includes(plan)) {
-      return res.status(400).json({ error: 'Invalid plan selected' });
+    if (!priceId) {
+      return res.status(400).json({ error: 'Price ID is required' });
     }
 
-    // انتخاب Price ID مناسب از فایل .env
-    const priceId = plan === 'gold' 
-      ? process.env.STRIPE_PRICE_ID_GOLD 
-      : process.env.STRIPE_PRICE_ID_PLATINUM;
+    const user = await User.findById(userId);
 
-    // ساخت سشن پرداخت در استرایپ
     const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [
         {
           price: priceId,
-          quantity: 1, // تعداد: ۱ اشتراک
+          quantity: 1,
         },
       ],
-      mode: 'subscription', // حالت اشتراکی (ماهانه)
+      customer_email: user?.email,
       
-      // ✅ نکته امنیتی مهم:
-      // ما آیدی کاربر و نوع پلن را در metadata ذخیره می‌کنیم.
-      // وقتی پرداخت انجام شد، استرایپ این اطلاعات را به ما برمی‌گرداند 
-      // تا بدانیم کدام کاربر پول داده است.
+      // ✅ تغییر مهم: ارسال planName در متادیتا برای استفاده در Webhook
       metadata: {
         userId: userId.toString(),
-        plan: plan
+        planName: planName || 'premium', 
       },
-      
-      // آدرس‌هایی که کاربر بعد از پرداخت به آنجا برمی‌گردد (در فرانت‌اند)
+
       success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.CLIENT_URL}/upgrade`, // اگر پشیمان شد برگردد به صفحه آپگرید
+      cancel_url: `${process.env.CLIENT_URL}/upgrade`,
     });
 
-    // لینک پرداخت را به فرانت‌اند می‌فرستیم
     res.json({ url: session.url });
 
   } catch (error) {
-    console.error("Stripe Error:", error);
+    console.error("Checkout Session Error:", error);
     res.status(500).json({ error: 'Failed to create checkout session' });
   }
 };

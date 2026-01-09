@@ -14,6 +14,17 @@ const conversationSchema = new mongoose.Schema(
       createdAt: { type: Date, default: Date.now },
       unreadCount: { type: Map, of: Number, default: {} }
     },
+    status: {
+      type: String,
+      enum: ["active", "pending", "rejected"],
+      default: "active", // برای چت‌های قدیمی که این فیلد را ندارند، فعال فرض می‌شود
+    },
+    
+    // ✅ NEW: چه کسی شروع کننده بحث بوده؟ (برای اینکه بدانیم ریکوئست را به کی نشان دهیم)
+    initiator: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    }
   },
   { timestamps: true }
 );

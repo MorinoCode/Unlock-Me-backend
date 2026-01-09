@@ -6,11 +6,36 @@ import {
 } from "../../utils/matchUtils.js";
 import { emitNotification } from "../../utils/notificationHelper.js";
 
+// --- Helper Functions for Limits ---
+const getSwipeLimit = (plan) => {
+  const normalizedPlan = plan?.toLowerCase() || 'free';
+  switch (normalizedPlan) {
+    case 'platinum': return Infinity; 
+    case 'gold': return 80;
+    case 'free': default: return 30;
+  }
+};
+
+const getSuperLikeLimit = (plan) => {
+  const normalizedPlan = plan?.toLowerCase() || 'free';
+  switch (normalizedPlan) {
+    case 'platinum': return Infinity;
+    case 'gold': return 5;
+    case 'free': default: return 1;
+  }
+};
+
+// ✅ Helper: Check if two dates are the same day (New)
+const isSameDay = (d1, d2) => {
+  return d1.getFullYear() === d2.getFullYear() &&
+         d1.getMonth() === d2.getMonth() &&
+         d1.getDate() === d2.getDate();
+};
+
+// --- Get Cards (No Changes) ---
 export const getSwipeCards = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.userId;
-    
-    // 1. دریافت کاربر به همراه لیست مچ‌های آماده (potentialMatches)
     const me = await User.findById(currentUserId).select("location interests lookingFor potentialMatches likedUsers dislikedUsers superLikedUsers dna");
     
     if (!me) return res.status(404).json({ message: "User not found" });
@@ -35,36 +60,26 @@ export const getSwipeCards = async (req, res) => {
     };
 
     if (me.lookingFor && me.lookingFor !== 'all') {
-      // استفاده از Regex برای تطابق دقیق‌تر (case-insensitive)
       query.gender = { $regex: new RegExp(`^${me.lookingFor}$`, "i") };
     }
 
-    // 2. انتخاب تصادفی کاربران (Candidates)
     const candidates = await User.aggregate([
       { $match: query },
       { $sample: { size: 20 } } 
     ]);
 
-    // 3. ترکیب اطلاعات با دیتای کش شده توسط Worker
     const enrichedCards = candidates.map(user => {
-      
-      // ✅ بهینه‌سازی حیاتی: اول کش را چک کن!
-      // بررسی می‌کنیم آیا Worker قبلاً امتیازی برای این یوزر حساب کرده؟
       const preCalculatedMatch = me.potentialMatches?.find(
           m => m.user.toString() === user._id.toString()
       );
 
       let compatibility;
-      
       if (preCalculatedMatch) {
-          // اگر در کش بود، از همان استفاده کن (بدون فشار به CPU)
           compatibility = preCalculatedMatch.matchScore;
       } else {
-          // اگر نبود (کاربر جدید)، در لحظه حساب کن
           compatibility = calculateCompatibility(me, user);
       }
 
-      // DNA قبلاً در یوزر ذخیره شده، اینجا فقط فرمت‌دهی می‌شود
       const dnaProfile = calculateUserDNA(user);
       const insights = generateMatchInsights(me, user);
 
@@ -83,12 +98,10 @@ export const getSwipeCards = async (req, res) => {
         gender: user.gender,
         location: user.location,
         voiceIntro: user.voiceIntro || null, 
-
-        matchScore: compatibility,   // ✅ امتیاز (یا از کش یا محاسبه شده)
+        matchScore: compatibility, 
         dna: dnaProfile,             
         insights: insights,
         icebreaker: icebreakerHint,  
-        
         isPremiumCandidate: compatibility >= 90, 
       };
     });
@@ -101,84 +114,156 @@ export const getSwipeCards = async (req, res) => {
   }
 };
 
+// --- Handle Swipe Action (Updated Logic) ---
 export const handleSwipeAction = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.userId;
     const { targetUserId, action } = req.body; 
     const io = req.app.get("io");
 
-    // 1. Validation
+    // 1. Basic Validation
     if (!targetUserId || !action) {
       return res.status(400).json({ message: "Invalid data: targetUserId and action are required." });
     }
 
     const targetUser = await User.findById(targetUserId);
-    if (!targetUser) {
-      return res.status(404).json({ message: "Target user not found" });
-    }
+    if (!targetUser) return res.status(404).json({ message: "Target user not found" });
 
     const currentUserData = await User.findById(currentUserId);
-    if (!currentUserData) {
-      return res.status(404).json({ message: "Current user not found" });
+    if (!currentUserData) return res.status(404).json({ message: "Current user not found" });
+
+    // 2. ✅ CHECK LIMITS & DAILY RESET LOGIC
+    const userPlan = currentUserData.subscription?.plan || 'free';
+    const swipeLimit = getSwipeLimit(userPlan);
+    const superLikeLimit = getSuperLikeLimit(userPlan);
+
+    const now = new Date();
+    const lastSwipeDate = currentUserData.usage?.lastSwipeDate ? new Date(currentUserData.usage.lastSwipeDate) : null;
+
+    // متغیرهای شمارنده فعلی
+    let swipesToday = currentUserData.usage?.swipesCount || 0;
+    let superLikesToday = currentUserData.usage?.superLikesCount || 0;
+    
+    // فلگ برای اینکه بفهمیم آیا امروز روز جدیدی است؟
+    let isResetting = false;
+
+    // اگر تاریخ آخرین سواپ وجود دارد و مال امروز نیست، یعنی روز جدید شده
+    if (lastSwipeDate && !isSameDay(now, lastSwipeDate)) {
+        isResetting = true;
+        swipesToday = 0;      // ریست مجازی برای محاسبه
+        superLikesToday = 0;  // ریست مجازی برای محاسبه
+    }
+
+    // الف) چک کردن محدودیت سواپ (چپ یا راست)
+    if (action === 'right' || action === 'left') {
+        if (swipeLimit !== Infinity && swipesToday >= swipeLimit) {
+            return res.status(403).json({ 
+                error: "Limit Reached", 
+                message: "You have reached your daily swipe limit. Upgrade to continue!" 
+            });
+        }
+    }
+
+    // ب) چک کردن محدودیت سوپر لایک (بالا)
+    if (action === 'up') {
+        if (superLikeLimit !== Infinity && superLikesToday >= superLikeLimit) {
+            return res.status(403).json({ 
+                error: "Limit Reached", 
+                message: "You have reached your daily Super Like limit. Upgrade for more!" 
+            });
+        }
     }
 
     let isMatch = false;
+    let updateQuery = {};
+    let finalUsageUpdate = {}; // برای استفاده در ساخت کوئری دیتابیس
 
-    // 2. Processing Actions
+    // 3. ✅ PROCESS ACTION & BUILD DB QUERY
+    // اگر در حال ریست هستیم، باید مقادیر را با $set جایگزین کنیم (نه $inc)
+    
     if (action === 'left') { 
-      // Dislike logic
-      await User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { dislikedUsers: targetUserId }
-      });
+      // Dislike
+      updateQuery = { $addToSet: { dislikedUsers: targetUserId } };
+      
+      if (isResetting) {
+          // روز جدید: سواپ میشه ۱، سوپر لایک میشه ۰، تاریخ آپدیت میشه
+          finalUsageUpdate = { 
+             "usage.swipesCount": 1, 
+             "usage.superLikesCount": 0, 
+             "usage.lastSwipeDate": now 
+          };
+          updateQuery["$set"] = finalUsageUpdate;
+      } else {
+          // روز جاری: سواپ +۱، تاریخ آپدیت
+          updateQuery["$inc"] = { "usage.swipesCount": 1 };
+          updateQuery["$set"] = { "usage.lastSwipeDate": now };
+      }
     } 
     else if (action === 'right' || action === 'up') {
-      // Like or SuperLike logic
       const updateField = action === 'right' ? 'likedUsers' : 'superLikedUsers';
-      
-      await User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { [updateField]: targetUserId }
-      });
+      updateQuery = { $addToSet: { [updateField]: targetUserId } };
 
-      // If it's a SuperLike, we also update the receiver's superLikedBy list
-      if (action === 'up') {
-        await User.findByIdAndUpdate(targetUserId, {
-          $addToSet: { superLikedBy: currentUserId }
-        });
+      if (isResetting) {
+         // روز جدید
+         finalUsageUpdate = { 
+             "usage.swipesCount": 1, 
+             "usage.lastSwipeDate": now,
+             "usage.superLikesCount": action === 'up' ? 1 : 0 
+         };
+         updateQuery["$set"] = finalUsageUpdate;
+      } else {
+         // روز جاری
+         updateQuery["$set"] = { "usage.lastSwipeDate": now };
+         
+         // اگر سوپر لایک است، هم سواپ اضافه می‌شود هم سوپر لایک
+         if (action === 'up') {
+             updateQuery["$inc"] = { "usage.swipesCount": 1, "usage.superLikesCount": 1 };
+         } else {
+             updateQuery["$inc"] = { "usage.swipesCount": 1 };
+         }
       }
+    }
 
-      // 3. Match Detection
-      // Check if the target user has already liked or superliked the current user
+    // اعمال آپدیت روی دیتابیس
+    await User.findByIdAndUpdate(currentUserId, updateQuery);
+
+    // اگر سوپر لایک بود، در لیست طرف مقابل هم ثبت کن
+    if (action === 'up') {
+      await User.findByIdAndUpdate(targetUserId, {
+        $addToSet: { superLikedBy: currentUserId }
+      });
+    }
+
+    // 4. Match Detection
+    if (action === 'right' || action === 'up') {
       const hasLikedMe = (targetUser.likedUsers || []).includes(currentUserId.toString()) || 
                          (targetUser.superLikedUsers || []).includes(currentUserId.toString());
 
       if (hasLikedMe) {
         isMatch = true;
 
-        // 4. Send Notifications for Match (Persistent & Real-time)
-        
-        // Notification to the Target User (the person who was swiped on)
+        // Notifications
         await emitNotification(io, targetUserId, {
           type: "MATCH",
           senderId: currentUserId,
           senderName: currentUserData.name,
           senderAvatar: currentUserData.avatar,
           message: "It's a Match! You both liked each other ❤️",
-          targetId: currentUserId.toString() // Clicking leads to current user profile/chat
+          targetId: currentUserId.toString() 
         });
 
-        // Notification to the Current User (the person swiping)
         await emitNotification(io, currentUserId, {
           type: "MATCH",
           senderId: targetUserId,
           senderName: targetUser.name,
           senderAvatar: targetUser.avatar,
           message: "Congratulations! You have a new match 🔥",
-          targetId: targetUserId.toString() // Clicking leads to target user profile/chat
+          targetId: targetUserId.toString() 
         });
       }
     }
 
-    // 5. Final Response
+    // 5. Response
     res.status(200).json({ 
       success: true, 
       isMatch, 
@@ -186,7 +271,11 @@ export const handleSwipeAction = async (req, res) => {
         name: targetUser.name,
         avatar: targetUser.avatar,
         id: targetUser._id
-      } : null
+      } : null,
+      updatedUsage: {
+          swipesCount: isResetting ? 1 : (swipesToday + 1),
+          superLikesCount: action === 'up' ? (isResetting ? 1 : superLikesToday + 1) : (isResetting ? 0 : superLikesToday)
+      }
     });
 
   } catch (error) {

@@ -1,13 +1,17 @@
 import express from 'express';
-import { createCheckoutSession } from '../controllers/paymentController/paymentController.js';
-// ⚠️ نکته: مسیر ایمپورت زیر را بر اساس ساختار پروژه‌تان چک کنید.
-// این همان تابعی است که چک می‌کند کاربر لاگین است یا نه.
+import { 
+    createCheckoutSession, 
+    getSubscriptionPlans // <--- این تابع را اضافه کردیم
+} from '../controllers/paymentController/paymentController.js';
+
 import { protect } from '../middleware/auth.js'; 
 
 const router = express.Router();
 
-// آدرس: /api/payment/create-session
-// protect: یعنی فقط کاربر لاگین شده می‌تواند درخواست دهد
+// ✅ روت جدید: دریافت قیمت‌ها (معمولاً نیازی به لاگین ندارد تا همه قیمت را ببینند، اما اگر بخواهید می‌توانید protect بگذارید)
+router.get('/plans', getSubscriptionPlans);
+
+// روت قبلی: ساخت لینک پرداخت (حتماً باید لاگین باشد)
 router.post('/create-session', protect, createCheckoutSession);
 
 export default router;

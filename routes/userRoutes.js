@@ -2,7 +2,7 @@
 import express from "express";
 import { protect } from "../middleware/auth.js";
 import { getUserDetails, getUserLocation } from "../controllers/explore/explore.js";
-import { getMatchesDashboard, handleDislike, handleLike } from "../controllers/userActions/userActions.js";
+import { handleDislike, handleLike } from "../controllers/userActions/userActions.js";
 import { 
   deleteAccount,
   forgotPassword,
@@ -11,7 +11,8 @@ import {
   updateCategoryAnswers, 
   updateGallery, 
   updatePassword, 
-  updateProfileInfo 
+  updateProfileInfo,
+  getMatchesDashboard
 } from "../controllers/userController/userController.js";
 import { authLimiter } from "../middleware/authLimiter.js";
 import { signinUser } from "../controllers/signin/signinUser.js";
@@ -41,6 +42,7 @@ router.put("/profile/password", protect, updatePassword);
 router.put("/profile/gallery", protect, updateGallery);
 router.put("/profile/categories", protect, updateCategoryAnswers);
 router.delete("/profile/delete-account", protect, deleteAccount); 
+router.get("/matches/matches-dashbord", protect, getMatchesDashboard); 
 
 
 export default router;

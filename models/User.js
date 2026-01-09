@@ -28,16 +28,17 @@ const userSchema = new mongoose.Schema(
       year: String,
     },
 
-   
     bio: {
       type: String,
       maxlength: 150,
       default: "",
     },
+
+    // ✅ UPDATE: تغییر premium به platinum طبق لاجیک جدید
     subscription: {
       plan: {
         type: String,
-        enum: ["free", "premium", "gold"],
+        enum: ["free", "gold", "platinum"], // premium حذف و platinum اضافه شد
         default: "free",
       },
       expiresAt: { type: Date, default: null },
@@ -47,37 +48,30 @@ const userSchema = new mongoose.Schema(
         default: "active",
       },
     },
-    likedUsers: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-    likedBy: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-    dislikedUsers: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
 
-    superLikedUsers: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-    superLikedBy: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
+    // ✅ NEW: بخش مدیریت مصرف روزانه (Usage Limits)
+    usage: {
+      // تعداد لایک‌های امروز
+      swipesCount: { type: Number, default: 0 },
+      // تعداد سوپر لایک‌های امروز
+      superLikesCount: { type: Number, default: 0 },
+      // تعداد دایرکت مسیج‌های امروز (بدون مچ)
+      directMessagesCount: { type: Number, default: 0 },
+      // تعداد ورود به بلایند دیت امروز
+      blindDatesCount: { type: Number, default: 0 },
+      
+      // زمان آخرین بلایند دیت (برای محاسبه فاصله زمانی ۱ یا ۴ ساعته)
+      lastBlindDateAt: { type: Date, default: null },
+      
+      // برای اینکه بفهمیم کی باید این عددها را صفر کنیم (ریست روزانه)
+      lastResetDate: { type: Date, default: Date.now }
+    },
+
+    likedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    likedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    dislikedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    superLikedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    superLikedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
     interests: [String],
     avatar: { type: String, default: "" },
@@ -96,56 +90,56 @@ const userSchema = new mongoose.Schema(
         default: {},
       },
     },
+    
     phone: { type: String, default: "" },
     detailedAddress: { type: String, default: "" },
+    
     gallery: {
       type: [String],
       validate: [arrayLimit, "{PATH} exceeds the limit of 6"],
     },
+    
     voiceIntro: { type: String, default: "" },
+    
     dna: {
-    Logic: { type: Number, default: 50 },
-    Emotion: { type: Number, default: 50 },
-    Energy: { type: Number, default: 50 },
-    Creativity: { type: Number, default: 50 },
-    Discipline: { type: Number, default: 50 }
-  },
-  potentialMatches: [
-    {
-      user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      matchScore: Number, // امتیار را هم ذخیره می‌کنیم که بعداً راحت سورت کنیم
-      updatedAt: { type: Date, default: Date.now }
-    }
-  ],
-  location: {
+      Logic: { type: Number, default: 50 },
+      Emotion: { type: Number, default: 50 },
+      Energy: { type: Number, default: 50 },
+      Creativity: { type: Number, default: 50 },
+      Discipline: { type: Number, default: 50 }
+    },
+
+    potentialMatches: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        matchScore: Number, 
+        updatedAt: { type: Date, default: Date.now }
+      }
+    ],
+
+    location: {
       type: {
         type: String,
-        enum: ["Point"], // فقط مقدار Point مجاز است
+        enum: ["Point"], 
         default: "Point",
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
-        default: [0, 0], // مقدار پیش‌فرض
+        default: [0, 0], 
       },
       country: { type: String, default: "" },
       city: { type: String, default: "" },
     },
 
-  // یک تاریخ که بدانیم آخرین بار کی برای این یوزر مچ پیدا کردیم
-  lastMatchCalculation: { type: Date, default: null }
+    lastMatchCalculation: { type: Date, default: null }
   },
   { timestamps: true }
 );
 
-// ✅ 1. ایندکس برای جستجوی لوکیشن (برای Nearby و فیلتر کشور)
+// Indexes
 userSchema.index({ "location.country": 1, "location.city": 1 });
-
-// ✅ 2. ایندکس برای پیدا کردن جدیدترین‌ها (برای Newest)
 userSchema.index({ "location.country": 1, createdAt: -1 });
-
-// ✅ 3. ایندکس برای فیلتر جنسیت (ترکیبی با کشور)
 userSchema.index({ "location.country": 1, gender: 1 });
-
 userSchema.index({ "location": "2dsphere" });
 
 const User = mongoose.model("User", userSchema);

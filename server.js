@@ -19,6 +19,7 @@ import blindDateRoutes from "./routes/blindDateRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import webhookRoutes from "./routes/webhookRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
+import goDateRoutes from "./routes/goDateRoutes.js";
 // import { addToQueue } from "./utils/blindDateService.js"; // ❌ Removed
 import BlindSession from "./models/BlindSession.js";
 import BlindQuestion from "./models/BlindQuestion.js";
@@ -426,6 +427,7 @@ app.use('/api/posts', postRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/blind-date', blindDateRoutes);
+app.use('/api/go-date', goDateRoutes);
 app.get("/ping", (req, res) => {
   res.status(200).send("pong 🏓");
 });

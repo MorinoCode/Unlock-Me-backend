@@ -6,20 +6,39 @@ function arrayLimit(val) {
 
 const userSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
-    username: { 
-      type: String, 
-      required: true, 
-      unique: true, 
-      lowercase: true, 
-      trim: true,     
-      minlength: 3,
-      maxlength: 15
+    name: { type: String, required: true, trim: true },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
     },
-    password: { type: String, required: true },
-    gender: { type: String },
-    lookingFor: { type: String },
+    username: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      minlength: 3,
+      maxlength: 15,
+    },
+    password: { type: String, required: true, select: false },
+    refreshToken: { type: String, select: false }, // ✅ Security Fix: Store refresh token
+
+    gender: {
+      type: String,
+      enum: ["Male", "Female", "Other"],
+      default: "Other", // ✅ Bug Fix: Default must match enum value
+      trim: true,
+    },
+
+    lookingFor: {
+      type: String,
+      enum: ["Male", "Female", "Other"],
+      trim: true,
+    },
+
     role: { type: String, default: "user" },
 
     birthday: {
@@ -32,13 +51,13 @@ const userSchema = new mongoose.Schema(
       type: String,
       maxlength: 150,
       default: "",
+      trim: true,
     },
 
-    // ✅ UPDATE: تغییر premium به platinum طبق لاجیک جدید
     subscription: {
       plan: {
         type: String,
-        enum: ["free", "gold", "platinum"], // premium حذف و platinum اضافه شد
+        enum: ["free", "gold", "platinum", "diamond"], // ✅ Added Diamond plan
         default: "free",
       },
       expiresAt: { type: Date, default: null },
@@ -49,22 +68,14 @@ const userSchema = new mongoose.Schema(
       },
     },
 
-    // ✅ NEW: بخش مدیریت مصرف روزانه (Usage Limits)
     usage: {
-      // تعداد لایک‌های امروز
       swipesCount: { type: Number, default: 0 },
-      // تعداد سوپر لایک‌های امروز
       superLikesCount: { type: Number, default: 0 },
-      // تعداد دایرکت مسیج‌های امروز (بدون مچ)
       directMessagesCount: { type: Number, default: 0 },
-      // تعداد ورود به بلایند دیت امروز
       blindDatesCount: { type: Number, default: 0 },
-      
-      // زمان آخرین بلایند دیت (برای محاسبه فاصله زمانی ۱ یا ۴ ساعته)
       lastBlindDateAt: { type: Date, default: null },
-      
-      // برای اینکه بفهمیم کی باید این عددها را صفر کنیم (ریست روزانه)
-      lastResetDate: { type: Date, default: Date.now }
+      lastSwipeDate: { type: Date, default: null }, // ✅ Critical Fix: Add missing field
+      lastResetDate: { type: Date, default: Date.now },
     },
 
     likedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
@@ -72,6 +83,8 @@ const userSchema = new mongoose.Schema(
     dislikedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     superLikedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     superLikedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    // ✅ Bug Fix: Explicit matches array for mutual matches
+    matches: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
     interests: [String],
     avatar: { type: String, default: "" },
@@ -90,57 +103,70 @@ const userSchema = new mongoose.Schema(
         default: {},
       },
     },
-    
+
     phone: { type: String, default: "" },
     detailedAddress: { type: String, default: "" },
-    
+
     gallery: {
       type: [String],
       validate: [arrayLimit, "{PATH} exceeds the limit of 6"],
     },
-    
+
     voiceIntro: { type: String, default: "" },
-    
+
     dna: {
       Logic: { type: Number, default: 50 },
       Emotion: { type: Number, default: 50 },
       Energy: { type: Number, default: 50 },
       Creativity: { type: Number, default: 50 },
-      Discipline: { type: Number, default: 50 }
+      Discipline: { type: Number, default: 50 },
     },
 
     potentialMatches: [
       {
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-        matchScore: Number, 
-        updatedAt: { type: Date, default: Date.now }
-      }
+        matchScore: Number,
+        updatedAt: { type: Date, default: Date.now },
+      },
     ],
 
     location: {
       type: {
         type: String,
-        enum: ["Point"], 
+        enum: ["Point"],
         default: "Point",
       },
       coordinates: {
-        type: [Number], // [longitude, latitude]
-        default: [0, 0], 
+        type: [Number],
+        default: [0, 0],
       },
-      country: { type: String, default: "" },
-      city: { type: String, default: "" },
+      country: { type: String, default: "", trim: true },
+      city: { type: String, default: "", trim: true },
     },
 
-    lastMatchCalculation: { type: Date, default: null }
+    lastMatchCalculation: { type: Date, default: null },
   },
   { timestamps: true }
 );
 
-// Indexes
+// ✅ Performance Fix: Database Indexes
 userSchema.index({ "location.country": 1, "location.city": 1 });
 userSchema.index({ "location.country": 1, createdAt: -1 });
 userSchema.index({ "location.country": 1, gender: 1 });
-userSchema.index({ "location": "2dsphere" });
+userSchema.index({ location: "2dsphere" });
+// email and username: index created by unique: true in schema — do not add duplicate
+userSchema.index({ "dna.Logic": 1, "dna.Emotion": 1, "dna.Energy": 1 }); // For DNA queries
+userSchema.index({ lastMatchCalculation: 1 }); // For match worker
+userSchema.index({ "subscription.plan": 1, "subscription.status": 1 }); // For subscription queries
+userSchema.index({ likedUsers: 1 }); // For match queries
+userSchema.index({ likedBy: 1 }); // For match queries
+userSchema.index({ dislikedUsers: 1 }); // For swipe: "users who disliked me" exclusion
+userSchema.index({ createdAt: -1 }); // For sorting by newest
+
+// ✅ Swipe fallback query: country + gender + dna (compound for getCandidatesFromDB / getSwipeCards)
+userSchema.index({ "location.country": 1, gender: 1, dna: 1 });
+// ✅ Explore "nearby" + sort by new: country + city + createdAt
+userSchema.index({ "location.country": 1, "location.city": 1, createdAt: -1 });
 
 const User = mongoose.model("User", userSchema);
 export default User;

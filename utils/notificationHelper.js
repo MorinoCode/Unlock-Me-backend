@@ -20,6 +20,9 @@ export const emitNotification = async (io, receiverId, notificationData) => {
 
     const savedNotification = await newNotification.save();
 
+    const { invalidateMatchesCache } = await import("../utils/cacheHelper.js");
+    await invalidateMatchesCache(receiverId.toString(), "notifications").catch(() => {});
+
     // ۲. ارسال از طریق سوکت
     // ما از room استفاده می‌کنیم چون در سمت فرانت، کاربر هنگام اتصال به اتاقی با نام userId خودش join می‌شود
     if (io) {

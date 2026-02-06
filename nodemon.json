@@ -1,0 +1,16 @@
+{
+  "watch": [
+    "*.js",
+    "config",
+    "controllers",
+    "middleware",
+    "models",
+    "routes",
+    "sockets",
+    "utils",
+    "workers"
+  ],
+  "ignore": ["node_modules", "*.test.js"],
+  "exec": "node server.js",
+  "ext": "js,json"
+}

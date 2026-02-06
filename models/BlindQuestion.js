@@ -1,24 +1,31 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const BlindQuestionSchema = new mongoose.Schema({
+  key: {
+    type: String,
+    required: true,
+    unique: true,
+  },
   text: {
     type: String,
-    required: true
+    required: true,
   },
-  options: [{
-    type: String,
-    required: true
-  }],
+  options: [
+    {
+      type: String,
+      required: true,
+    },
+  ],
   category: {
     type: String,
-    required: true
+    required: true,
   },
   stage: {
     type: Number,
     required: true,
-    enum: [1, 2]
-  }
+    enum: [1, 2],
+  },
 });
 
-const BlindQuestion = mongoose.model('BlindQuestion', BlindQuestionSchema);
+const BlindQuestion = mongoose.model("BlindQuestion", BlindQuestionSchema);
 export default BlindQuestion;

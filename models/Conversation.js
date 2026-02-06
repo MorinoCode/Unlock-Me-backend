@@ -12,23 +12,37 @@ const conversationSchema = new mongoose.Schema(
       text: String,
       sender: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       createdAt: { type: Date, default: Date.now },
-      unreadCount: { type: Map, of: Number, default: {} }
+      unreadCount: { type: Map, of: Number, default: {} },
     },
     status: {
       type: String,
       enum: ["active", "pending", "rejected"],
-      default: "active", // برای چت‌های قدیمی که این فیلد را ندارند، فعال فرض می‌شود
+      default: "active",
     },
-    
-    // ✅ NEW: چه کسی شروع کننده بحث بوده؟ (برای اینکه بدانیم ریکوئست را به کی نشان دهیم)
     initiator: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-    }
+    },
+    matchType: {
+      type: String,
+      enum: ["swipe", "blind_date", "direct", "go_date"],
+      default: "direct",
+    },
+    isUnlocked: {
+      type: Boolean,
+      default: false,
+    },
+    // کاربرانی که این چت را از لیست خود حذف کرده‌اند (تاریخچه برای طرف مقابل باقی می‌ماند)
+    hiddenBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   },
   { timestamps: true }
 );
 
+// ✅ Performance Fix: Optimized indexes
 conversationSchema.index({ participants: 1 });
+conversationSchema.index({ updatedAt: -1 });
+conversationSchema.index({ "lastMessage.createdAt": -1 });
+conversationSchema.index({ status: 1, updatedAt: -1 });
+conversationSchema.index({ hiddenBy: 1 });
 
 export default mongoose.model("Conversation", conversationSchema);

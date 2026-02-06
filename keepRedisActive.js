@@ -45,7 +45,7 @@ async function keepRedisActive() {
     console.log('⏰ Set TTL to 7 days');
     
     // بررسی وضعیت اتصال
-    const info = await redisClient.info('server');
+    await redisClient.info('server');
     console.log('ℹ️  Redis is active and responding!');
     
     console.log('\n✅ Redis successfully activated! Your database will not be deleted.');

@@ -27,12 +27,8 @@ import {
   getCompatibilityScore,
   setCompatibilityScore,
   getTopCandidates,
-  addToRankingPool,
   addExcludedUser,
-  addExcludedUsersBatch,
-  isExcluded,
   getFromPotentialPool,
-  setPotentialMatchesPool,
   invalidateUserCaches,
 } from "../../utils/redisMatchHelper.js";
 

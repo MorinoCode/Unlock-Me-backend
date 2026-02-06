@@ -255,6 +255,7 @@ app.get("/health", async (req, res) => {
 // ==========================================
 // 7. GLOBAL ERROR HANDLER
 // ==========================================
+// eslint-disable-next-line no-unused-vars -- Express requires 4-arg signature for error middleware
 app.use((err, req, res, next) => {
   if (err.message === "CORS_ERROR") {
     return res.status(403).json({

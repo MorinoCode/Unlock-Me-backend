@@ -1,4 +1,4 @@
-import jwt, { decode } from "jsonwebtoken";
+import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
 export const protect = async (req, res, next) => {
@@ -53,7 +53,7 @@ export const protect = async (req, res, next) => {
             req.user = user;
             req.user.userId = user._id.toString();
             return next();
-          } catch (refreshError) {
+          } catch {
             return res.status(401).json({ message: "Token expired. Please sign in again." });
           }
         } else {
@@ -79,7 +79,7 @@ export const protect = async (req, res, next) => {
     req.user.userId = user._id.toString(); 
 
     next();
-  } catch (err) {
+  } catch {
     // ✅ Security Fix: Don't expose error details
     return res.status(401).json({ message: "Token is not valid" });
   }

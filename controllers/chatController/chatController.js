@@ -304,16 +304,10 @@ export const getConversations = async (req, res) => {
     });
 
     // Map conversations with unread counts
-    const conversationsWithUnread = conversations.map((conv) => {
-      const otherUser = conv.participants.find(
-        (p) => p._id.toString() !== myId.toString()
-      );
-
-      return {
-        ...conv,
-        unreadCount: unreadMap[conv._id.toString()] || 0,
-      };
-    });
+    const conversationsWithUnread = conversations.map((conv) => ({
+      ...conv,
+      unreadCount: unreadMap[conv._id.toString()] || 0,
+    }));
 
     await setMatchesCache(myId, cacheType, conversationsWithUnread, INBOX_CACHE_TTL);
     res.status(200).json(conversationsWithUnread);
@@ -342,15 +336,6 @@ export const getMessages = async (req, res) => {
     const pageNum = Math.max(1, parseInt(page));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit))); // Max 100 per page
     const skip = (pageNum - 1) * limitNum;
-
-    // ✅ Performance Fix: Count total for pagination
-    const totalMessages = await Message.countDocuments({
-      $or: [
-        { sender: myId, receiver: otherUserId },
-        { sender: otherUserId, receiver: myId },
-      ],
-      isDeleted: false,
-    });
 
     const messages = await Message.find({
       $or: [

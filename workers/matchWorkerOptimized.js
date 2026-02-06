@@ -7,7 +7,6 @@ import User from "../models/User.js";
 import cron from "node-cron";
 import { calculateCompatibility } from "../utils/matchUtils.js";
 import {
-  setCompatibilityScore,
   batchSetCompatibilityScores,
   setPotentialMatchesPool,
   addToRankingPool,

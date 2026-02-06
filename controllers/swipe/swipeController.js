@@ -31,7 +31,6 @@ export const getSwipeCards = async (req, res) => {
     const currentUserId = req.user._id || req.user.userId;
 
     // ✅ Performance Fix: Try cache first
-    const cacheKey = `swipe:${currentUserId}`;
     const cached = await getMatchesCache(currentUserId, "swipe");
     if (cached) {
       return res.status(200).json(cached);

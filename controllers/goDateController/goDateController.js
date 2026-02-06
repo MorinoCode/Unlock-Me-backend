@@ -166,7 +166,9 @@ export const getAvailableDates = async (req, res) => {
     for (const date of expiredDates) {
       try {
         if (date.imageId) await cloudinary.uploader.destroy(date.imageId);
-      } catch (_) {}
+      } catch {
+        // ignore cloudinary destroy errors
+      }
       await GoDate.findByIdAndDelete(date._id);
     }
 
@@ -601,7 +603,6 @@ export const cancelGoDate = async (req, res) => {
 export const getGoDateDetails = async (req, res) => {
   try {
     const { dateId } = req.params;
-    const userId = req.user._id;
 
     const cacheKey = `go_date_details_${dateId}`;
     const cached = await getMatchesCache("global", cacheKey);

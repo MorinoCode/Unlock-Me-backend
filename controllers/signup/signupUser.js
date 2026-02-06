@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import User from "../../models/User.js";
 import jwt from "jsonwebtoken";
-import { validatePassword, validateEmail, validateUsername, validateName, validateGender } from "../../utils/validators.js";
+import { validatePassword } from "../../utils/validators.js";
 
 const FORBIDDEN_USERNAMES = ["admin", "support", "root", "unlockme", "moderator"];
 

@@ -381,8 +381,8 @@ export const getUserDetails = async (req, res) => {
     const currentUserId = req.user.userId;
 
     // ✅ Performance Fix: Try cache first
-    const cacheKey = `user_details:${currentUserId}:${userId}`;
-    const cached = await getMatchesCache(currentUserId, `user_details_${userId}`);
+    const cacheKey = `user_details_${userId}`;
+    const cached = await getMatchesCache(currentUserId, cacheKey);
     if (cached) {
       return res.status(200).json(cached);
     }

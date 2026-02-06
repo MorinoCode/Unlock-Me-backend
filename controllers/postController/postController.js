@@ -52,11 +52,8 @@ export const getCountryFeed = async (req, res) => {
     const userCountry = req.user.location.country;
 
     // ✅ Performance Fix: Try cache first
-    const cacheKey = `posts:${userCountry}:${page}:${limit}`;
-    const cached = await getMatchesCache(
-      req.user.userId,
-      `posts_${userCountry}_${page}`
-    );
+    const cacheKey = `posts_${userCountry}_${page}`;
+    const cached = await getMatchesCache(req.user.userId, cacheKey);
     if (cached) {
       return res.status(200).json(cached);
     }

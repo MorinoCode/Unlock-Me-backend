@@ -170,9 +170,6 @@ export const updateProfileInfo = async (req, res) => {
         const base64Data = voiceIntro.substring(base64Index + 7); // Skip "base64,"
         
         // Extract audio format (webm, ogg, mp4, etc.)
-        const formatMatch = voiceIntro.match(/data:audio\/([^;]+)/);
-        const audioFormat = formatMatch ? formatMatch[1] : 'webm';
-        
         // Check approximate size (base64 is ~33% larger than binary)
         const sizeInBytes = (base64Data.length * 3) / 4;
         const maxSize = 10 * 1024 * 1024; // 10MB limit

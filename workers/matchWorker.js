@@ -1,127 +1,247 @@
-// backend/workers/matchWorker.js
 import User from "../models/User.js";
 import cron from "node-cron";
-// 👇 1. Import kardan haman tabeyi ke dar Profile estefade mikonim
 import { calculateCompatibility } from "../utils/matchUtils.js";
 
-const BATCH_SIZE = 50; 
-let isRunning = false;
+const BATCH_SIZE = 20; // کاهش از 50 به 20 برای مصرف کمتر حافظه
+const CONCURRENT_USERS = 3; // پردازش حداکثر 3 کاربر همزمان (به جای همه)
+const MAX_CANDIDATES = 150; // کاهش از 300 به 150 برای مصرف کمتر حافظه
+// ✅ Scalability Fix: Removed MAX_TOTAL_USERS limit - process all users
+// Priority: Users without lastMatchCalculation (new users) are processed first
 
-// Zaman-bandi: Har 4 saat
+let isRunning = false;
+let processedCount = 0;
+
+// تابع helper برای پردازش sequential با concurrency محدود
+async function processWithConcurrency(items, concurrency, processor) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.all(
+      batch.map(item => processor(item).catch(err => {
+        console.error(`Error processing user ${item._id}:`, err.message);
+        return null;
+      }))
+    );
+    results.push(...batchResults.filter(r => r !== null));
+    
+    // پاکسازی حافظه بعد از هر batch
+    if (global.gc) {
+      global.gc();
+    }
+    
+    // استراحت کوتاه برای جلوگیری از overload
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  return results;
+}
+
 cron.schedule("0 */4 * * *", async () => {
-  if (isRunning) return;
+  if (isRunning) {
+    console.log("⏰ Internal Match Job: Already running, skipping...");
+    return;
+  }
+  
   isRunning = true;
-  console.log(`⏰ Internal Match Job Started...`);
+  processedCount = 0;
+  const startTime = Date.now();
+  
   try {
+    console.log("⏰ Internal Match Job Started...");
     await processAllUsers();
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✅ Internal Match Job Completed: Processed ${processedCount} users in ${duration}s`);
   } catch (error) {
-    console.error("❌ Match Job Failed:", error);
+    console.error("❌ Internal Match Job Error:", error);
   } finally {
     isRunning = false;
-    console.log(`💤 Internal Match Job Finished.`);
+    processedCount = 0;
   }
 });
 
 async function processAllUsers() {
   let hasMoreUsers = true;
-  let totalProcessed = 0;
+  let skip = 0;
+  let isProcessingNewUsers = true; // ✅ Scalability Fix: Process new users first
 
-  while (hasMoreUsers) {
-    // Select users needing update
-    const usersBatch = await User.find({
-      $or: [
-        { lastMatchCalculation: { $exists: false } },
-        { lastMatchCalculation: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
-      ]
+  // ✅ Scalability Fix: First, process users without lastMatchCalculation (new users)
+  while (hasMoreUsers && isProcessingNewUsers) {
+    const newUsersBatch = await User.find({
+      lastMatchCalculation: { $exists: false }
     })
-    // ✅ Mohem: Bayad hame etelaat lazem baraye calculateCompatibility ro begirim
-    .select("dna location lookingFor name interests birthday gender subscription") 
+    .select("dna location lookingFor name interests birthday gender subscription questionsbycategoriesResults") 
     .lean()
-    .limit(BATCH_SIZE);
+    .limit(BATCH_SIZE)
+    .skip(skip);
+
+    if (newUsersBatch.length === 0) {
+      isProcessingNewUsers = false;
+      skip = 0; // Reset skip for old users
+      break;
+    }
+
+    await processWithConcurrency(
+      newUsersBatch, 
+      CONCURRENT_USERS, 
+      async (user) => {
+        await findMatchesForUser(user);
+        processedCount++;
+        if (processedCount % 10 === 0) {
+          console.log(`📊 Progress (New Users): ${processedCount} users processed...`);
+        }
+      }
+    );
+
+    skip += BATCH_SIZE;
+    
+    if (global.gc) {
+      global.gc();
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  // ✅ Scalability Fix: Then process users with outdated matches
+  skip = 0;
+  while (hasMoreUsers) {
+    const usersBatch = await User.find({
+      lastMatchCalculation: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    })
+    .select("dna location lookingFor name interests birthday gender subscription questionsbycategoriesResults") 
+    .lean()
+    .limit(BATCH_SIZE)
+    .skip(skip)
+    .sort({ lastMatchCalculation: 1 }); // Oldest first
 
     if (usersBatch.length === 0) {
       hasMoreUsers = false;
       break;
     }
 
-    await Promise.all(usersBatch.map(user => findMatchesForUser(user).catch(err => 
-        console.error(`Error on user ${user._id}:`, err.message)
-    )));
+    await processWithConcurrency(
+      usersBatch, 
+      CONCURRENT_USERS, 
+      async (user) => {
+        await findMatchesForUser(user);
+        processedCount++;
+        if (processedCount % 50 === 0) {
+          console.log(`📊 Progress (All Users): ${processedCount} users processed...`);
+        }
+      }
+    );
 
-    totalProcessed += usersBatch.length;
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    skip += BATCH_SIZE;
+    
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    if (global.gc) {
+      global.gc();
+    }
   }
-  
-  if (totalProcessed > 0) console.log(`✅ Cycle Finished. Total: ${totalProcessed}`);
 }
 
 async function findMatchesForUser(currentUser) {
-  if (!currentUser.location || !currentUser.location.country) {
-      await User.updateOne({ _id: currentUser._id }, { lastMatchCalculation: new Date() });
-      return;
-  }
+  try {
+    if (!currentUser.location || !currentUser.location.country) {
+        await User.updateOne({ _id: currentUser._id }, { lastMatchCalculation: new Date() });
+        return;
+    }
 
-  const myDNA = currentUser.dna || { Logic: 50, Emotion: 50, Energy: 50, Creativity: 50, Discipline: 50 };
+    // ✅ Fix 2: Better DNA validation
+    if (!currentUser.dna || typeof currentUser.dna !== 'object') {
+        console.warn(`⚠️ User ${currentUser._id} has no DNA. Skipping match calculation.`);
+        await User.updateOne({ _id: currentUser._id }, { lastMatchCalculation: new Date() });
+        return;
+    }
+
+    const myDNA = currentUser.dna || { Logic: 50, Emotion: 50, Energy: 50, Creativity: 50, Discipline: 50 };
   
   let genderFilter = {};
-  if (currentUser.lookingFor && currentUser.lookingFor !== 'everyone') {
-     genderFilter = { gender: { $regex: new RegExp(`^${currentUser.lookingFor}$`, "i") } }; 
+  if (currentUser.lookingFor) {
+      genderFilter = { gender: currentUser.lookingFor };
   }
 
-  // 1. Estefade az Aggregation FAGHAT baraye peyda kardan candidate ha (Filter + Rough Sort)
-  // Ma inja mohasebe daghigh nemikonim, faghat 300 nafar bartar ro peyda mikonim
+  // ✅ Fix 2: DNA Null Check - Filter users without DNA first
   const candidates = await User.aggregate([
     {
       $match: {
         _id: { $ne: currentUser._id },
-        "location.country": currentUser.location.country, 
+        "location.country": currentUser.location.country,
+        "dna": { $exists: true, $ne: null }, // ✅ Only users with DNA
+        "dna.Logic": { $exists: true, $type: "number" },
+        "dna.Emotion": { $exists: true, $type: "number" },
+        "dna.Energy": { $exists: true, $type: "number" },
+        "dna.Creativity": { $exists: true, $type: "number" },
+        "dna.Discipline": { $exists: true, $type: "number" },
         ...genderFilter
       }
     },
     {
       $addFields: {
-        // Mohasebe taghribi baraye sort kardan avalie
         dnaDiff: {
           $add: [
-            { $abs: { $subtract: ["$dna.Logic", myDNA.Logic] } },
-            { $abs: { $subtract: ["$dna.Emotion", myDNA.Emotion] } },
-            { $abs: { $subtract: ["$dna.Energy", myDNA.Energy] } },
-            { $abs: { $subtract: ["$dna.Creativity", myDNA.Creativity] } },
-            { $abs: { $subtract: ["$dna.Discipline", myDNA.Discipline] } }
+            { $abs: { $subtract: [{ $ifNull: ["$dna.Logic", 50] }, myDNA.Logic] } },
+            { $abs: { $subtract: [{ $ifNull: ["$dna.Emotion", 50] }, myDNA.Emotion] } },
+            { $abs: { $subtract: [{ $ifNull: ["$dna.Energy", 50] }, myDNA.Energy] } },
+            { $abs: { $subtract: [{ $ifNull: ["$dna.Creativity", 50] }, myDNA.Creativity] } },
+            { $abs: { $subtract: [{ $ifNull: ["$dna.Discipline", 50] }, myDNA.Discipline] } }
           ]
         }
       }
     },
-    { $sort: { dnaDiff: 1 } }, // Kamtarin ekhtelaf DNA ro peyda kon
-    { $limit: 300 }, // 300 nafar aval ro entekhab kon
+    { $sort: { dnaDiff: 1 } }, 
+    { $limit: MAX_CANDIDATES }, 
+    {
+        $project: {
+            name: 1,
+            avatar: 1,
+            bio: 1,
+            interests: 1,
+            location: 1,
+            birthday: 1,
+            subscription: 1,
+            gender: 1,
+            createdAt: 1,
+            isVerified: 1,
+            dna: 1,
+            questionsbycategoriesResults: 1
+        }
+    }
   ]);
 
-  // 2. 🟢 Mohasebe DAGHIGH ba JavaScript (Haman tabe Profile)
   const formattedMatches = candidates.map(candidate => {
-    // Tabdil be object sade agar niaz bashad, ama calculateCompatibility obmject user ro mikhad
-    // Chon candidate az aggregate omade, shamele field haye user hast.
-    
-    // ✅ Inja mojze etefagh miofte: estefade az haman Logic
     const exactScore = calculateCompatibility(currentUser, candidate);
 
     return {
         user: candidate._id,
-        matchScore: exactScore, // In adad daghighan hamoonie ke to profile neshon midim
+        matchScore: exactScore, 
         updatedAt: new Date()
     };
   });
 
-  // Sort kardan nahayi bar asas emtiaz daghigh JS
   formattedMatches.sort((a, b) => b.matchScore - a.matchScore);
 
-  // Zakhire dar DB
-  await User.updateOne(
-      { _id: currentUser._id },
-      { 
-          $set: { 
-              potentialMatches: formattedMatches,
-              lastMatchCalculation: new Date()
-          }
-      }
-  );
+  const topMatches = formattedMatches.slice(0, 100);
+
+    await User.updateOne(
+        { _id: currentUser._id },
+        { 
+            $set: { 
+                potentialMatches: topMatches,
+                lastMatchCalculation: new Date()
+            }
+        }
+    );
+  } catch (error) {
+    // ✅ Fix 6: Proper error handling - update lastMatchCalculation even on error
+    console.error(`❌ Error finding matches for user ${currentUser._id}:`, error.message);
+    try {
+      await User.updateOne(
+        { _id: currentUser._id },
+        { lastMatchCalculation: new Date() }
+      );
+    } catch (updateError) {
+      console.error(`❌ Failed to update lastMatchCalculation for user ${currentUser._id}:`, updateError.message);
+    }
+    throw error; // Re-throw to be caught by processWithConcurrency
+  }
 }

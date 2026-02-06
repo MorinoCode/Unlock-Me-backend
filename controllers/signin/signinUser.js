@@ -16,30 +16,40 @@ export const signinUser = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-    // JWT token
-    const token = jwt.sign(
-      { userId: user._id, role: user.role, location: user.location, username: user.username },
+    // ✅ Security Fix: Shorter access token + refresh token
+    const accessToken = jwt.sign(
+      { userId: user._id, role: user.role, location: user.location, username: user.username, type: 'access' },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+    
+    const refreshToken = jwt.sign(
+      { userId: user._id, type: 'refresh' },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
+    
+    // Store refresh token
+    await User.findByIdAndUpdate(user._id, { refreshToken });
 
     // 2. تشخیص محیط (لوکال یا پروداکشن)
     const isProduction = process.env.NODE_ENV === "production";
 
     // 3. تنظیم کوکی (اصلاح شده برای آیفون و ساب‌دامین)
-    res.cookie("unlock-me-token", token, {
+    res.cookie("unlock-me-token", accessToken, {
       httpOnly: true,
-      
-      // در پروداکشن True، در لوکال False (تا روی http کار کند)
       secure: isProduction, 
-      
-      // بهترین گزینه برای سازگاری با موبایل وقتی دامین ست می‌کنیم
       sameSite: "lax", 
-      
-      // ⚠️ حیاتی‌ترین خط: اشتراک کوکی بین api.unlock-me.app و unlock-me.app
       domain: isProduction ? ".unlock-me.app" : undefined, 
-      
-      maxAge: 7 * 24 * 60 * 60 * 1000, 
+      maxAge: 60 * 60 * 1000, // 1 hour
+    });
+    
+    res.cookie("unlock-me-refresh-token", refreshToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: "lax",
+      domain: isProduction ? ".unlock-me.app" : undefined,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
     res.status(200).json({
@@ -50,6 +60,11 @@ export const signinUser = async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ message: "Server error", error: err.message });
+    console.error("Signin Error:", err);
+    // ✅ Security Fix: Don't expose error details
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : err.message;
+    res.status(500).json({ message: errorMessage });
   }
 };

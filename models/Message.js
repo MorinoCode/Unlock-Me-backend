@@ -5,10 +5,12 @@ const messageSchema = new mongoose.Schema(
     conversationId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Conversation",
+      required: true,
+      index: true 
     },
-    sender: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     receiver: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    text: String,
+    text: { type: String, trim: true },
     fileUrl: String,
     fileType: {
       type: String,
@@ -32,5 +34,13 @@ const messageSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// ✅ Performance Fix: Optimized indexes
+messageSchema.index({ conversationId: 1, createdAt: -1 }); // Changed to -1 for descending
+messageSchema.index({ sender: 1, createdAt: -1 }); // For sender queries
+messageSchema.index({ receiver: 1, isRead: 1 }); // For unread messages
+messageSchema.index({ isDeleted: 1 }); // For filtering deleted messages
+// ✅ Performance Fix: Compound index for unread count queries (conversationId + receiver + isRead)
+messageSchema.index({ conversationId: 1, receiver: 1, isRead: 1 });
 
 export default mongoose.model("Message", messageSchema);

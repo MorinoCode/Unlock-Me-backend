@@ -1,12 +1,19 @@
 import bcrypt from "bcryptjs";
 import User from "../../models/User.js";
 import jwt from "jsonwebtoken";
+import { validatePassword } from "../../utils/validators.js";
 
 const FORBIDDEN_USERNAMES = ["admin", "support", "root", "unlockme", "moderator"];
 
 export const signupUser = async (req, res) => {
   try {
     let { name, username, email, password, gender, lookingFor } = req.body;
+
+    // ✅ Security Fix: Backend validation (even though middleware validates, double-check here)
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ message: passwordValidation.message });
+    }
 
     // 1. نرمال‌سازی داده‌ها
     email = email.toLowerCase();
@@ -48,29 +55,44 @@ export const signupUser = async (req, res) => {
 
     await newUser.save();
 
-    // 6. ساخت توکن
-    const token = jwt.sign(
-      { userId: newUser._id, role: newUser.role, username: newUser.username },
+    // ✅ Security Fix: Shorter token expiration + refresh token
+    // Access token: 1 hour (was 7 days)
+    const accessToken = jwt.sign(
+      { userId: newUser._id, role: newUser.role, username: newUser.username, type: 'access' },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+    
+    // Refresh token: 7 days
+    const refreshToken = jwt.sign(
+      { userId: newUser._id, type: 'refresh' },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
+    
+    // Store refresh token in user document (for future token refresh endpoint)
+    await User.findByIdAndUpdate(newUser._id, { 
+      refreshToken: refreshToken 
+    });
 
    const isProduction = process.env.NODE_ENV === "production";
 
-    res.cookie("unlock-me-token", token, {
+    // ✅ Security Fix: Set access token cookie (1 hour)
+    res.cookie("unlock-me-token", accessToken, {
       httpOnly: true,
-      
-      // در پروداکشن حتما True
       secure: isProduction, 
-      
-      // تغییر مهم: وقتی دامین ست می‌کنیم، Lax بهترین گزینه برای آیفون است
       sameSite: "lax", 
-      
-      // تغییر حیاتی: این خط باعث می‌شود کوکی بین api و سایت اصلی شیر شود
-      // اگر این را نگذاری، آیفون کوکی را ذخیره نمی‌کند
       domain: isProduction ? ".unlock-me.app" : undefined, 
-      
-      maxAge: 7 * 24 * 60 * 60 * 1000, 
+      maxAge: 60 * 60 * 1000, // 1 hour
+    });
+    
+    // ✅ Security Fix: Set refresh token cookie (7 days)
+    res.cookie("unlock-me-refresh-token", refreshToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: "lax",
+      domain: isProduction ? ".unlock-me.app" : undefined,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
     res.status(201).json({
@@ -84,6 +106,10 @@ export const signupUser = async (req, res) => {
 
   } catch (err) {
     console.error("Signup Error:", err);
-    res.status(500).json({ message: "Server error", error: err.message });
+    // ✅ Security Fix: Don't expose error details in production
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : err.message;
+    res.status(500).json({ message: errorMessage });
   }
 };

@@ -200,6 +200,7 @@ export const generateIcebreakers = async (req, res) => {
 
   } catch (error) {
     console.error("AI Wingman Error:", error);
+    // ✅ Fix: Return fallback suggestions even on error (graceful degradation)
     res.status(200).json({
       suggestions: [
         { type: "🧊 Icebreaker", text: "Hey! How is your day going?" },

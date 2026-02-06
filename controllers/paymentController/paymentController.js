@@ -1,38 +1,136 @@
-import Stripe from 'stripe';
-import dotenv from 'dotenv';
-import User from '../../models/User.js'; // مدل یوزر را ایمپورت کنید (برای اطمینان)
+import Stripe from "stripe";
+import dotenv from "dotenv";
+import User from "../../models/User.js";
+import { getAppCache, setAppCache } from "../../utils/cacheHelper.js";
 
 dotenv.config();
+const PLANS_CACHE_TTL = 3600; // 1 hour
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ✅ 1. تابع جدید: دریافت لیست پلن‌ها از استرایپ برای نمایش در فرانت‌اند
+// نگاشت کشور به ارز (کد ISO کشور -> کد ارز Stripe)
+const COUNTRY_TO_CURRENCY = {
+  SE: "sek",
+  SV: "sek", // Sweden, El Salvador (SEK = Swedish Krona)
+  US: "usd",
+  GB: "gbp",
+  CA: "cad",
+  AU: "aud",
+  NZ: "nzd",
+  DE: "eur",
+  FR: "eur",
+  IT: "eur",
+  ES: "eur",
+  NL: "eur",
+  AT: "eur",
+  BE: "eur",
+  FI: "eur",
+  IE: "eur",
+  PT: "eur",
+  NO: "nok",
+  DK: "dkk",
+  PL: "pln",
+  CH: "chf",
+  CZ: "czk",
+  IN: "inr",
+  JP: "jpy",
+  CN: "cny",
+  KR: "krw",
+  BR: "brl",
+  MX: "mxn",
+  RU: "rub",
+  AE: "aed",
+  SA: "sar",
+  EG: "egp",
+  TR: "try",
+  IL: "ils",
+};
+
+function getCurrencyFromCountry(country) {
+  if (!country || typeof country !== "string") return null;
+  const code = country.trim().toUpperCase().slice(0, 2);
+  return COUNTRY_TO_CURRENCY[code] || null;
+}
+
+// ✅ 1. دریافت لیست پلن‌ها با پشتیبانی ارز بر اساس کشور/پارامتر
 export const getSubscriptionPlans = async (req, res) => {
   try {
-    // دریافت تمام قیمت‌های فعال از استرایپ + اطلاعات محصول مرتبط
+    const requestedCurrency =
+      (req.query.currency || "").toLowerCase().trim() || null;
+    let preferredCurrency = requestedCurrency;
+    if (!preferredCurrency && req.user != null) {
+      const userId = req.user._id ?? req.user.userId;
+      if (userId) {
+        const user = await User.findById(userId).select("location").lean();
+        const country = user?.location?.country;
+        preferredCurrency = getCurrencyFromCountry(country);
+      }
+    }
+    const cacheKey = `subscription_plans_${preferredCurrency || "default"}`;
+    const cached = await getAppCache(cacheKey);
+    if (cached) return res.status(200).json(cached);
+
     const prices = await stripe.prices.list({
       active: true,
-      expand: ['data.product'], // برای دسترسی به نام محصول (Gold/Platinum)
+      expand: ["data.product"],
     });
 
-    // مرتب‌سازی و ساده‌سازی داده‌ها برای ارسال به فرانت‌اند
-    const plans = prices.data.map((price) => ({
-      id: price.id,                 // Price ID (مثلاً price_12345)
-      nickname: price.nickname,     // نام بازه (Monthly/Yearly)
-      amount: price.unit_amount / 100, // تبدیل سنت به دلار (مثلاً 999 -> 9.99)
-      currency: price.currency,
-      interval: price.recurring?.interval, // month یا year
-      productName: price.product.name,     // نام محصول (Gold Member, Platinum)
-      // اگر در داشبورد استرایپ برای محصول Metadata ست کرده باشید، اینجا می‌آید
-      features: price.product.metadata.features 
-        ? JSON.parse(price.product.metadata.features) 
-        : [], 
-    }));
+    // گروه‌بندی بر اساس product.id و انتخاب یک قیمت به‌ازای هر محصول (ترجیح ارز کاربر)
+    const byProduct = {};
+    for (const price of prices.data) {
+      const productId = price.product?.id ?? price.product;
+      if (!productId) continue;
+      const product =
+        price.product?.object === "product" ? price.product : null;
+      if (!byProduct[productId]) byProduct[productId] = { product, prices: [] };
+      byProduct[productId].prices.push(price);
+    }
 
-    res.status(200).json(plans);
+    const plans = [];
+    for (const productId of Object.keys(byProduct)) {
+      const { product, prices: productPrices } = byProduct[productId];
+      const productName = product?.name ?? "Plan";
+      let chosen = productPrices[0];
+      if (preferredCurrency) {
+        const match = productPrices.find(
+          (p) => (p.currency || "").toLowerCase() === preferredCurrency
+        );
+        if (match) chosen = match;
+      }
+      plans.push({
+        id: chosen.id,
+        nickname: chosen.nickname,
+        amount:
+          chosen.unit_amount != null
+            ? Math.round(chosen.unit_amount / 100)
+            : null,
+        currency: chosen.currency?.toLowerCase() || chosen.currency,
+        interval: chosen.recurring?.interval || "month",
+        productName,
+        features: product?.metadata?.features
+          ? typeof product.metadata.features === "string"
+            ? (() => {
+                try {
+                  return JSON.parse(product.metadata.features);
+                } catch {
+                  return [];
+                }
+              })()
+            : product.metadata.features
+          : [],
+      });
+    }
+
+    const sorted = plans.sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
+    await setAppCache(cacheKey, sorted, PLANS_CACHE_TTL);
+    res.status(200).json(sorted);
   } catch (error) {
     console.error("Stripe Fetch Error:", error);
-    res.status(500).json({ error: "Failed to fetch plans from Stripe" });
+    const errorMessage =
+      process.env.NODE_ENV === "production"
+        ? "Server error. Please try again later."
+        : error.message;
+    res.status(500).json({ error: errorMessage });
   }
 };
 
@@ -40,18 +138,18 @@ export const getSubscriptionPlans = async (req, res) => {
 export const createCheckoutSession = async (req, res) => {
   try {
     // ✅ تغییر: گرفتن planName از بدنه درخواست
-    const { priceId, planName } = req.body; 
+    const { priceId, planName } = req.body;
     const userId = req.user._id;
 
     if (!priceId) {
-      return res.status(400).json({ error: 'Price ID is required' });
+      return res.status(400).json({ error: "Price ID is required" });
     }
 
     const user = await User.findById(userId);
 
     const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      payment_method_types: ['card'],
+      mode: "subscription",
+      payment_method_types: ["card"],
       line_items: [
         {
           price: priceId,
@@ -59,11 +157,11 @@ export const createCheckoutSession = async (req, res) => {
         },
       ],
       customer_email: user?.email,
-      
+
       // ✅ تغییر مهم: ارسال planName در متادیتا برای استفاده در Webhook
       metadata: {
         userId: userId.toString(),
-        planName: planName || 'premium', 
+        planName: planName || "premium",
       },
 
       success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
@@ -71,9 +169,215 @@ export const createCheckoutSession = async (req, res) => {
     });
 
     res.json({ url: session.url });
-
   } catch (error) {
     console.error("Checkout Session Error:", error);
-    res.status(500).json({ error: 'Failed to create checkout session' });
+    const errorMessage =
+      process.env.NODE_ENV === "production"
+        ? "Server error. Please try again later."
+        : error.message;
+    res.status(500).json({ error: errorMessage });
+  }
+};
+
+// ✅ Cancel Subscription
+export const cancelSubscription = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.userId;
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Check if user has an active subscription
+    if (user.subscription?.status !== "active" || user.subscription?.plan === "free") {
+      return res.status(400).json({ message: "No active subscription to cancel" });
+    }
+
+    // Update subscription status to canceled
+    // Keep expiresAt as is (user keeps access until expiry)
+    await User.findByIdAndUpdate(userId, {
+      $set: {
+        "subscription.status": "canceled"
+      }
+    });
+
+    res.status(200).json({ 
+      message: "Subscription canceled successfully",
+      subscription: {
+        plan: user.subscription.plan,
+        status: "canceled",
+        expiresAt: user.subscription.expiresAt
+      }
+    });
+  } catch (error) {
+    console.error("Cancel Subscription Error:", error);
+    const errorMessage =
+      process.env.NODE_ENV === "production"
+        ? "Server error. Please try again later."
+        : error.message;
+    res.status(500).json({ error: errorMessage });
+  }
+};
+
+// ✅ Change Plan (creates new checkout session for upgrade/downgrade)
+export const changePlan = async (req, res) => {
+  try {
+    const { priceId, planName } = req.body;
+    const userId = req.user._id || req.user.userId;
+
+    if (!priceId || !planName) {
+      return res.status(400).json({ error: "Price ID and plan name are required" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Create checkout session for plan change
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      customer_email: user?.email,
+      metadata: {
+        userId: userId.toString(),
+        planName: planName,
+        isPlanChange: "true"
+      },
+      success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.CLIENT_URL}/myprofile`,
+    });
+
+    res.json({ url: session.url });
+  } catch (error) {
+    console.error("Change Plan Error:", error);
+    const errorMessage =
+      process.env.NODE_ENV === "production"
+        ? "Server error. Please try again later."
+        : error.message;
+    res.status(500).json({ error: errorMessage });
+  }
+};
+
+// ✅ Verify Payment Session and Update Subscription (Fallback if webhook fails)
+export const verifyPaymentAndUpdateSubscription = async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const userId = req.user._id || req.user.userId;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+
+    // Retrieve session from Stripe with expanded line_items
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ['line_items', 'line_items.data.price.product', 'subscription']
+    });
+
+    // Security check: verify userId matches session metadata
+    const sessionUserId = session.metadata?.userId;
+    if (sessionUserId && sessionUserId !== userId.toString()) {
+      return res.status(403).json({ error: "Session does not belong to this user" });
+    }
+
+    // Check if payment was successful
+    if (session.payment_status !== 'paid') {
+      return res.status(400).json({ error: "Payment not completed" });
+    }
+
+    // Extract plan name from metadata or product
+    let planName = session.metadata?.planName;
+    
+    if (!planName && session.line_items?.data?.[0]?.price?.product) {
+      try {
+        const product = session.line_items.data[0].price.product;
+        if (typeof product === 'object') {
+          planName = product.name || product.metadata?.planName;
+        } else {
+          // If product is just an ID, retrieve it
+          const productObj = await stripe.products.retrieve(product);
+          planName = productObj.name || productObj.metadata?.planName;
+        }
+      } catch (err) {
+        console.error("Error fetching product:", err);
+      }
+    }
+
+    // Fallback: get from subscription
+    if (!planName && session.subscription) {
+      try {
+        const subscriptionId = typeof session.subscription === 'string' 
+          ? session.subscription 
+          : session.subscription.id;
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+          expand: ['items.data.price.product']
+        });
+        const price = subscription.items.data[0]?.price;
+        if (price?.product) {
+          const product = price.product;
+          if (typeof product === 'object') {
+            planName = product.name || product.metadata?.planName;
+          } else {
+            const productObj = await stripe.products.retrieve(product);
+            planName = productObj.name || productObj.metadata?.planName;
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching subscription:", err);
+      }
+    }
+
+    planName = planName || 'premium';
+
+    // Determine plan type
+    let planType = 'free';
+    const planLower = planName.toLowerCase();
+    if (planLower.includes('diamond')) {
+      planType = 'diamond';
+    } else if (planLower.includes('platinum')) {
+      planType = 'platinum';
+    } else if (planLower.includes('gold')) {
+      planType = 'gold';
+    }
+
+    // Calculate expiration date (30 days from now)
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30);
+
+    // Update database
+    const updatedUser = await User.findByIdAndUpdate(userId, {
+      $set: {
+        "subscription.plan": planType,
+        "subscription.status": "active",
+        "subscription.expiresAt": expiresAt,
+      }
+    }, { new: true });
+
+    if (!updatedUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    console.log(`✅ Subscription verified and updated. User ${userId} now has plan: ${planType}`);
+
+    res.json({ 
+      success: true,
+      plan: planType,
+      expiresAt: expiresAt.toISOString(),
+      message: "Subscription updated successfully"
+    });
+  } catch (error) {
+    console.error("Verify Payment Error:", error);
+    const errorMessage =
+      process.env.NODE_ENV === "production"
+        ? "Server error. Please try again later."
+        : error.message;
+    res.status(500).json({ error: errorMessage });
   }
 };

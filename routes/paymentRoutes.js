@@ -1,17 +1,29 @@
-import express from 'express';
-import { 
-    createCheckoutSession, 
-    getSubscriptionPlans // <--- این تابع را اضافه کردیم
-} from '../controllers/paymentController/paymentController.js';
+import express from "express";
+import {
+  createCheckoutSession,
+  getSubscriptionPlans,
+  cancelSubscription,
+  changePlan,
+  verifyPaymentAndUpdateSubscription,
+} from "../controllers/paymentController/paymentController.js";
 
-import { protect } from '../middleware/auth.js'; 
+import { protect, optionalProtect } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// ✅ روت جدید: دریافت قیمت‌ها (معمولاً نیازی به لاگین ندارد تا همه قیمت را ببینند، اما اگر بخواهید می‌توانید protect بگذارید)
-router.get('/plans', getSubscriptionPlans);
+// دریافت پلن‌ها؛ اگر کاربر لاگین باشد ارز بر اساس کشور او انتخاب می‌شود، وگرنه از query.currency استفاده می‌شود
+router.get("/plans", optionalProtect, getSubscriptionPlans);
 
 // روت قبلی: ساخت لینک پرداخت (حتماً باید لاگین باشد)
-router.post('/create-session', protect, createCheckoutSession);
+router.post("/create-session", protect, createCheckoutSession);
+
+// Cancel subscription
+router.post("/cancel", protect, cancelSubscription);
+
+// Change plan
+router.post("/change-plan", protect, changePlan);
+
+// Verify payment and update subscription (fallback if webhook fails)
+router.post("/verify-session", protect, verifyPaymentAndUpdateSubscription);
 
 export default router;

@@ -27,10 +27,13 @@ export const submitReport = async (req, res) => {
     });
 
   } catch (error) {
+    console.error("Submit Report Error:", error);
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
     res.status(500).json({ 
       success: false, 
-      message: 'Server Error',
-      error: error.message 
+      message: errorMessage
     });
   }
 };

@@ -1,28 +1,34 @@
-import express from 'express';
-import { protect } from '../middleware/auth.js';
-import { 
-    createGoDate, 
-    getAvailableDates, 
-    getMyDates, 
-    applyForDate, 
-    acceptDateApplicant 
-} from '../controllers/goDateController/goDateController.js';
+import express from "express";
+import { protect } from "../middleware/auth.js";
+import multer from "multer";
+import {
+  createGoDate,
+  getAvailableDates,
+  getMyDates,
+  getGoDateDetails,
+  applyForDate,
+  withdrawApplication,
+  acceptDateApplicant,
+  cancelGoDate,
+  deleteGoDate,
+} from "../controllers/goDateController/goDateController.js";
+
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 const router = express.Router();
 
-// ساخت دیت جدید (با چک کردن لیمیت)
-router.post('/create', protect, createGoDate);
-
-// گرفتن لیست دیت‌ها (برای تب Browse)
-router.get('/all', protect, getAvailableDates);
-
-// گرفتن دیت‌های خودم (برای تب My Plans)
-router.get('/mine', protect, getMyDates);
-
-// درخواست دادن برای یک دیت
-router.post('/apply', protect, applyForDate);
-
-// قبول کردن یک نفر (توسط سازنده)
-router.post('/accept', protect, acceptDateApplicant);
+router.post("/create", protect, upload.single("image"), createGoDate);
+router.get("/all", protect, getAvailableDates);
+router.get("/mine", protect, getMyDates);
+router.get("/:dateId", protect, getGoDateDetails);
+router.post("/apply", protect, applyForDate);
+router.post("/withdraw", protect, withdrawApplication);
+router.post("/accept", protect, acceptDateApplicant);
+router.post("/:dateId/cancel", protect, cancelGoDate);
+router.delete("/:dateId", protect, deleteGoDate);
 
 export default router;

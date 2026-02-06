@@ -15,53 +15,79 @@ export const PLANS = {
   FREE: "free",
   GOLD: "gold",
   PLATINUM: "platinum",
+  DIAMOND: "diamond", // ✅ New: Ultimate unlimited plan
 };
 
 // Helper to normalize plan string
 const normalizePlan = (plan) => {
-    const p = plan?.toLowerCase() || PLANS.FREE;
-    if (p.includes("platinum") || p.includes("premium")) return PLANS.PLATINUM;
-    if (p.includes("gold")) return PLANS.GOLD;
-    return PLANS.FREE;
+  const p = plan?.toLowerCase() || PLANS.FREE;
+  if (p.includes("diamond")) return PLANS.DIAMOND; // ✅ Check Diamond first
+  if (p.includes("platinum") || p.includes("premium")) return PLANS.PLATINUM;
+  if (p.includes("gold")) return PLANS.GOLD;
+  return PLANS.FREE;
 };
 
 // --- VISIBILITY LIMITS ---
+// ✅ Sync with subscriptionRules.js
 export const getVisibilityThreshold = (plan) => {
   const p = normalizePlan(plan);
   switch (p) {
-    case PLANS.PLATINUM: return 100;
-    case PLANS.GOLD: return 90;
-    default: return 80;
+    case PLANS.DIAMOND:
+      return 100; // ✅ See ALL users regardless of match score
+    case PLANS.PLATINUM:
+      return 90;
+    case PLANS.GOLD:
+      return 80;
+    default:
+      return 70; // FREE
   }
 };
 
 // --- SOULMATE PERMISSIONS ---
+// ✅ Sync with subscriptionRules.js
 export const getSoulmatePermissions = (plan) => {
   const p = normalizePlan(plan);
   switch (p) {
-    case PLANS.PLATINUM: return { isLocked: false, limit: Infinity };
-    case PLANS.GOLD: return { isLocked: false, limit: 5 };
-    default: return { isLocked: true, limit: 0 };
+    case PLANS.DIAMOND:
+      return { isLocked: false, limit: Infinity }; // ✅ Unlimited Soulmates
+    case PLANS.PLATINUM:
+      return { isLocked: false, limit: 10 };
+    case PLANS.GOLD:
+      return { isLocked: false, limit: 5 };
+    default:
+      return { isLocked: true, limit: 0 }; // FREE
   }
 };
 
 // --- SWIPE LIMITS ---
+// ✅ Sync with subscriptionRules.js
 export const getSwipeLimit = (plan) => {
   const p = normalizePlan(plan);
   switch (p) {
-    case PLANS.PLATINUM: return Infinity;
-    case PLANS.GOLD: return 80;
-    default: return 30;
+    case PLANS.DIAMOND:
+      return Infinity; // ✅ Unlimited Swipes
+    case PLANS.PLATINUM:
+      return 110;
+    case PLANS.GOLD:
+      return 70;
+    default:
+      return 30; // FREE
   }
 };
 
 // --- SUPER LIKE LIMITS ---
+// ✅ Sync with subscriptionRules.js
 export const getSuperLikeLimit = (plan) => {
   const p = normalizePlan(plan);
   switch (p) {
-    case PLANS.PLATINUM: return Infinity;
-    case PLANS.GOLD: return 5;
-    default: return 1;
+    case PLANS.DIAMOND:
+      return Infinity; // ✅ Unlimited Super Likes
+    case PLANS.PLATINUM:
+      return 12;
+    case PLANS.GOLD:
+      return 6;
+    default:
+      return 2; // FREE
   }
 };
 
@@ -69,43 +95,63 @@ export const getSuperLikeLimit = (plan) => {
 export const getDailyDmLimit = (plan) => {
   const p = normalizePlan(plan);
   switch (p) {
-    case PLANS.PLATINUM: return 10;
-    case PLANS.GOLD: return 5;
-    default: return 0;
+    case PLANS.DIAMOND:
+      return Infinity; // ✅ Unlimited Direct Messages
+    case PLANS.PLATINUM:
+      return 10;
+    case PLANS.GOLD:
+      return 5;
+    default:
+      return 0;
   }
 };
 
 // --- BLIND DATE CONFIG ---
+// ✅ Sync with subscriptionRules.js
 export const getBlindDateConfig = (plan) => {
   const p = normalizePlan(plan);
   switch (p) {
-    case PLANS.PLATINUM: return { limit: Infinity, cooldownHours: 0 };
-    case PLANS.GOLD: return { limit: 4, cooldownHours: 1 };
-    default: return { limit: 2, cooldownHours: 4 };
+    case PLANS.DIAMOND:
+      return { limit: Infinity, cooldownHours: 0 }; // ✅ Unlimited Blind Dates, No Cooldown
+    case PLANS.PLATINUM:
+      return { limit: 8, cooldownHours: 1 };
+    case PLANS.GOLD:
+      return { limit: 4, cooldownHours: 2 };
+    default:
+      return { limit: 2, cooldownHours: 4 }; // FREE
   }
 };
 
 // --- MATCH LIST LIMITS ---
+// ✅ Sync with subscriptionRules.js
 export const getMatchListLimit = (plan, type) => {
   const p = normalizePlan(plan);
-  
-  if (type === 'mutual') return Infinity; 
 
-  if (type === 'incoming') { // Who liked you
+  if (type === "mutual") return Infinity;
+
+  if (type === "incoming") {
+    // Who liked you
     switch (p) {
+      case PLANS.DIAMOND:
       case PLANS.PLATINUM:
       case PLANS.GOLD:
-        return Infinity; 
+        return Infinity;
       default:
         return 0; // Locked for free users
     }
   }
 
-  if (type === 'sent') { // Who you liked
+  if (type === "sent") {
+    // Who you liked
     switch (p) {
-      case PLANS.PLATINUM: return Infinity;
-      case PLANS.GOLD: return 50; 
-      default: return 10;
+      case PLANS.DIAMOND:
+        return Infinity;
+      case PLANS.PLATINUM:
+        return 90;
+      case PLANS.GOLD:
+        return 50;
+      default:
+        return 10; // FREE
     }
   }
   return 0;
@@ -115,9 +161,12 @@ export const getMatchListLimit = (plan, type) => {
 export const getPromoBannerConfig = (plan) => {
   const p = normalizePlan(plan);
   switch (p) {
-    case PLANS.PLATINUM: return { showGold: false, showPlatinum: false, showBoost: true };
-    case PLANS.GOLD: return { showGold: false, showPlatinum: true, showBoost: true };
-    default: return { showGold: true, showPlatinum: true, showBoost: true };
+    case PLANS.PLATINUM:
+      return { showGold: false, showPlatinum: false, showBoost: true };
+    case PLANS.GOLD:
+      return { showGold: false, showPlatinum: true, showBoost: true };
+    default:
+      return { showGold: true, showPlatinum: true, showBoost: true };
   }
 };
 
@@ -125,33 +174,171 @@ export const getPromoBannerConfig = (plan) => {
 // 3. Data Mappings (Traits)
 // ==========================================
 const TRAIT_MAPPING = {
-  Solver: "Logic", Analytical: "Logic", Rational: "Logic", Thinker: "Logic", Scientific: "Logic", Pragmatist: "Logic", Optimizer: "Logic", Determinist: "Logic", Technical: "Logic", Objective: "Logic", Critical: "Logic",
-  Feeler: "Emotion", Empathetic: "Emotion", Sensitive: "Emotion", Romantic: "Emotion", Nurturing: "Emotion", Humanist: "Emotion", Peacekeeper: "Emotion", Emotional: "Emotion", Sentimental: "Emotion", Kind: "Emotion", Compassionate: "Emotion",
-  Active: "Energy", Energetic: "Energy", Extrovert: "Energy", Social: "Energy", Adventurous: "Energy", "Risk Taker": "Energy", Spontaneous: "Energy", Playful: "Energy", Leader: "Energy", Outgoing: "Energy",
-  Creator: "Creativity", Artist: "Creativity", Creative: "Creativity", Visual: "Creativity", Storyteller: "Creativity", Abstract: "Creativity", Dreamer: "Creativity", "Open-minded": "Creativity", Innovator: "Creativity",
-  Planner: "Discipline", Organized: "Discipline", Disciplined: "Discipline", Perfectionist: "Discipline", Efficient: "Discipline", Conservative: "Discipline", Stable: "Discipline", Reliable: "Discipline", Completionist: "Discipline", Structured: "Discipline", "Detail-oriented": "Discipline",
+  Solver: "Logic",
+  Analytical: "Logic",
+  Rational: "Logic",
+  Thinker: "Logic",
+  Scientific: "Logic",
+  Pragmatist: "Logic",
+  Optimizer: "Logic",
+  Determinist: "Logic",
+  Technical: "Logic",
+  Objective: "Logic",
+  Critical: "Logic",
+  Feeler: "Emotion",
+  Empathetic: "Emotion",
+  Sensitive: "Emotion",
+  Romantic: "Emotion",
+  Nurturing: "Emotion",
+  Humanist: "Emotion",
+  Peacekeeper: "Emotion",
+  Emotional: "Emotion",
+  Sentimental: "Emotion",
+  Kind: "Emotion",
+  Compassionate: "Emotion",
+  Active: "Energy",
+  Energetic: "Energy",
+  Extrovert: "Energy",
+  Social: "Energy",
+  Adventurous: "Energy",
+  "Risk Taker": "Energy",
+  Spontaneous: "Energy",
+  Playful: "Energy",
+  Leader: "Energy",
+  Outgoing: "Energy",
+  Creator: "Creativity",
+  Artist: "Creativity",
+  Creative: "Creativity",
+  Visual: "Creativity",
+  Storyteller: "Creativity",
+  Abstract: "Creativity",
+  Dreamer: "Creativity",
+  "Open-minded": "Creativity",
+  Innovator: "Creativity",
+  Planner: "Discipline",
+  Organized: "Discipline",
+  Disciplined: "Discipline",
+  Perfectionist: "Discipline",
+  Efficient: "Discipline",
+  Conservative: "Discipline",
+  Stable: "Discipline",
+  Reliable: "Discipline",
+  Completionist: "Discipline",
+  Structured: "Discipline",
+  "Detail-oriented": "Discipline",
 };
 
 const INSIGHT_TEMPLATES = {
-  Logic: { high_high: { title: "🧠 The Masterminds", description: "You both approach life with logic and facts.", tip: "Don't forget feelings." }, low_low: { title: "❤️ Heart-Led Connection", description: "Neither of you overthinks things.", tip: "Pause and plan sometimes." }, diff: { title: "⚖️ The Anchor & The Sail", description: "One analyzes, the other feels.", tip: "Listen without fixing." } },
-  Emotion: { high_high: { title: "🌊 Soulmate Energy", description: "A deeply emotional bond.", tip: "Set boundaries." }, low_low: { title: "🛡️ The Chill Duo", description: "No drama here.", tip: "Check in on each other." }, diff: { title: "🔥 Warmth meets Stability", description: "One brings depth, the other stability.", tip: "Respect the difference." } },
-  Energy: { high_high: { title: "🚀 The Power Couple", description: "Unstoppable energy.", tip: "Avoid burnout." }, low_low: { title: "🏡 Sanctuary Vibes", description: "Home is your happy place.", tip: "Go out sometimes." }, diff: { title: "⚡ The Spark & The Home", description: "One pulls the other out; one recharges the other.", tip: "Compromise on outings." } },
-  Creativity: { high_high: { title: "🎨 The Dreamers", description: "Full of imagination.", tip: "Who pays the bills?" }, low_low: { title: "🧱 The Realists", description: "Grounded and sensible.", tip: "Try something new." }, diff: { title: "🎈 The Kite & The String", description: "Visionary meets builder.", tip: "Ideas need execution." } },
-  Discipline: { high_high: { title: "🏆 The Empire Builders", description: "Organized and ambitious.", tip: "Learn to relax." }, low_low: { title: "🍃 The Bohemians", description: "Stress-free and spontaneous.", tip: "Set auto-pay for bills." }, diff: { title: "🌪️ Structure meets Chaos", description: "Plan meets surprise.", tip: "Don't nag; respect order." } },
+  Logic: {
+    high_high: {
+      title: "🧠 The Masterminds",
+      description: "You both approach life with logic and facts.",
+      tip: "Don't forget feelings.",
+    },
+    low_low: {
+      title: "❤️ Heart-Led Connection",
+      description: "Neither of you overthinks things.",
+      tip: "Pause and plan sometimes.",
+    },
+    diff: {
+      title: "⚖️ The Anchor & The Sail",
+      description: "One analyzes, the other feels.",
+      tip: "Listen without fixing.",
+    },
+  },
+  Emotion: {
+    high_high: {
+      title: "🌊 Soulmate Energy",
+      description: "A deeply emotional bond.",
+      tip: "Set boundaries.",
+    },
+    low_low: {
+      title: "🛡️ The Chill Duo",
+      description: "No drama here.",
+      tip: "Check in on each other.",
+    },
+    diff: {
+      title: "🔥 Warmth meets Stability",
+      description: "One brings depth, the other stability.",
+      tip: "Respect the difference.",
+    },
+  },
+  Energy: {
+    high_high: {
+      title: "🚀 The Power Couple",
+      description: "Unstoppable energy.",
+      tip: "Avoid burnout.",
+    },
+    low_low: {
+      title: "🏡 Sanctuary Vibes",
+      description: "Home is your happy place.",
+      tip: "Go out sometimes.",
+    },
+    diff: {
+      title: "⚡ The Spark & The Home",
+      description: "One pulls the other out; one recharges the other.",
+      tip: "Compromise on outings.",
+    },
+  },
+  Creativity: {
+    high_high: {
+      title: "🎨 The Dreamers",
+      description: "Full of imagination.",
+      tip: "Who pays the bills?",
+    },
+    low_low: {
+      title: "🧱 The Realists",
+      description: "Grounded and sensible.",
+      tip: "Try something new.",
+    },
+    diff: {
+      title: "🎈 The Kite & The String",
+      description: "Visionary meets builder.",
+      tip: "Ideas need execution.",
+    },
+  },
+  Discipline: {
+    high_high: {
+      title: "🏆 The Empire Builders",
+      description: "Organized and ambitious.",
+      tip: "Learn to relax.",
+    },
+    low_low: {
+      title: "🍃 The Bohemians",
+      description: "Stress-free and spontaneous.",
+      tip: "Set auto-pay for bills.",
+    },
+    diff: {
+      title: "🌪️ Structure meets Chaos",
+      description: "Plan meets surprise.",
+      tip: "Don't nag; respect order.",
+    },
+  },
 };
 
 // ==========================================
 // 4. Core Calculation Functions
 // ==========================================
-const DEFAULT_DNA = { Logic: 50, Emotion: 50, Energy: 50, Creativity: 50, Discipline: 50 };
+const DEFAULT_DNA = {
+  Logic: 50,
+  Emotion: 50,
+  Energy: 50,
+  Creativity: 50,
+  Discipline: 50,
+};
 
 export const calculateUserDNA = (user, forceRecalculate = false) => {
   // 1. Fast Read Mode
   if (!forceRecalculate) {
-      if (user && user.dna && typeof user.dna === 'object' && 'Logic' in user.dna) {
-          return user.dna;
-      }
-      return DEFAULT_DNA;
+    if (
+      user &&
+      user.dna &&
+      typeof user.dna === "object" &&
+      "Logic" in user.dna
+    ) {
+      return user.dna;
+    }
+    return DEFAULT_DNA;
   }
 
   // 2. Calculation Mode
@@ -168,7 +355,7 @@ export const calculateUserDNA = (user, forceRecalculate = false) => {
       results = rawCategories;
     } else if (rawCategories instanceof Map) {
       results = Array.from(rawCategories.values()).flat();
-    } else if (typeof rawCategories === 'object') {
+    } else if (typeof rawCategories === "object") {
       results = Object.values(rawCategories).flat();
     }
   }
@@ -177,23 +364,29 @@ export const calculateUserDNA = (user, forceRecalculate = false) => {
 
   const lowerCaseMapping = {};
   for (const [key, value] of Object.entries(TRAIT_MAPPING)) {
-      lowerCaseMapping[key.toLowerCase()] = value;
+    lowerCaseMapping[key.toLowerCase()] = value;
   }
 
-  results.forEach(item => {
+  results.forEach((item) => {
     let traitName = item.trait;
     if (!traitName && item.questions && Array.isArray(item.questions)) {
-       item.questions.forEach(q => {
-          if (q.trait) {
-             const cat = lowerCaseMapping[q.trait.toLowerCase().trim()];
-             if (cat) { dna[cat]++; totalTraitsFound++; }
+      item.questions.forEach((q) => {
+        if (q.trait) {
+          const cat = lowerCaseMapping[q.trait.toLowerCase().trim()];
+          if (cat) {
+            dna[cat]++;
+            totalTraitsFound++;
           }
-       });
-       return; 
+        }
+      });
+      return;
     }
-    if (traitName && typeof traitName === 'string') {
-        const cat = lowerCaseMapping[traitName.toLowerCase().trim()];
-        if (cat) { dna[cat]++; totalTraitsFound++; }
+    if (traitName && typeof traitName === "string") {
+      const cat = lowerCaseMapping[traitName.toLowerCase().trim()];
+      if (cat) {
+        dna[cat]++;
+        totalTraitsFound++;
+      }
     }
   });
 
@@ -218,9 +411,24 @@ export const calculateCompatibility = (me, other) => {
   let dnaSimilaritySum = 0;
   const axes = ["Logic", "Emotion", "Energy", "Creativity", "Discipline"];
 
-  axes.forEach(axis => {
-    const diff = Math.abs((myDNA[axis] || 50) - (otherDNA[axis] || 50));
-    dnaSimilaritySum += (100 - diff);
+  axes.forEach((axis) => {
+    const myValue = myDNA[axis];
+    const otherValue = otherDNA[axis];
+
+    // ✅ Fix 7: Better null check with logging
+    if (
+      myValue === null ||
+      myValue === undefined ||
+      otherValue === null ||
+      otherValue === undefined
+    ) {
+      console.warn(
+        `⚠️ DNA value missing for axis ${axis}: me=${myValue}, other=${otherValue}`
+      );
+    }
+
+    const diff = Math.abs((myValue || 50) - (otherValue || 50));
+    dnaSimilaritySum += 100 - diff;
   });
 
   const avgDnaScore = dnaSimilaritySum / 5;
@@ -229,7 +437,9 @@ export const calculateCompatibility = (me, other) => {
   let baseScore = 0;
 
   const myCity = me.location?.city ? me.location.city.trim().toLowerCase() : "";
-  const otherCity = other.location?.city ? other.location.city.trim().toLowerCase() : "";
+  const otherCity = other.location?.city
+    ? other.location.city.trim().toLowerCase()
+    : "";
 
   if (myCity && otherCity && myCity === otherCity) {
     baseScore += 15;
@@ -237,10 +447,10 @@ export const calculateCompatibility = (me, other) => {
 
   const myInterests = Array.isArray(me.interests) ? me.interests : [];
   const otherInterests = Array.isArray(other.interests) ? other.interests : [];
-  
-  const sharedInterests = myInterests.filter(i => otherInterests.includes(i));
+
+  const sharedInterests = myInterests.filter((i) => otherInterests.includes(i));
   const interestPoints = Math.min(sharedInterests.length * 3, 15);
-  
+
   baseScore += interestPoints;
 
   const finalScore = Math.round(weightedDnaScore + baseScore);
@@ -251,17 +461,17 @@ export const calculateCompatibility = (me, other) => {
 export const generateMatchInsights = (me, other) => {
   const myDNA = calculateUserDNA(me);
   const otherDNA = calculateUserDNA(other);
-  
+
   const insights = {
     synergies: [],
     frictions: [],
     sharedInterests: [],
-    dnaComparison: { me: myDNA, other: otherDNA }
+    dnaComparison: { me: myDNA, other: otherDNA },
   };
 
   const axes = ["Logic", "Emotion", "Energy", "Creativity", "Discipline"];
 
-  axes.forEach(axis => {
+  axes.forEach((axis) => {
     const myVal = myDNA[axis];
     const otherVal = otherDNA[axis];
     const diff = Math.abs(myVal - otherVal);
@@ -277,8 +487,7 @@ export const generateMatchInsights = (me, other) => {
         insightData = { ...INSIGHT_TEMPLATES[axis].low_low, axis };
         insights.synergies.push(insightData);
       }
-    } 
-    else if (diff >= 40) {
+    } else if (diff >= 40) {
       insightData = { ...INSIGHT_TEMPLATES[axis].diff, axis };
       insights.frictions.push(insightData);
     }
@@ -286,7 +495,9 @@ export const generateMatchInsights = (me, other) => {
 
   const myInterests = Array.isArray(me.interests) ? me.interests : [];
   const otherInterests = Array.isArray(other.interests) ? other.interests : [];
-  insights.sharedInterests = myInterests.filter(i => otherInterests.includes(i));
+  insights.sharedInterests = myInterests.filter((i) =>
+    otherInterests.includes(i)
+  );
 
   insights.synergies = shuffleArray(insights.synergies);
   insights.frictions = shuffleArray(insights.frictions);

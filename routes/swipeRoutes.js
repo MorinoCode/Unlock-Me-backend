@@ -1,6 +1,10 @@
 import express from "express";
 import { protect } from "../middleware/auth.js";
-import { getSwipeCards, handleSwipeAction } from "../controllers/swipe/swipeController.js";
+// ✅ Scalability Optimization: Use optimized controller with Redis
+import {
+  getSwipeCards,
+  handleSwipeAction,
+} from "../controllers/swipe/swipeControllerOptimized.js";
 
 const router = express.Router();
 

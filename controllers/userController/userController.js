@@ -9,9 +9,10 @@ import Conversation from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
 import Post from "../../models/Post.js";
 import { getMatchListLimit } from "../../utils/matchUtils.js";
-
+import { getMatchesCache, setMatchesCache, invalidateMatchesCache } from "../../utils/cacheHelper.js";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+const PROFILE_FULL_TTL = 300; // 5 min
 
 // --- Helper: Delete file from Cloudinary ---
 // Extracts public ID from URL including folder name
@@ -44,13 +45,29 @@ const deleteFromCloudinary = async (url) => {
 // --- Get Public User Info ---
 export const getUserById = async (req, res) => {
   try {
+    const requestedUserId = req.params.userId;
+    const currentUserId = req.user?.userId?.toString?.() || req.user?.id?.toString?.();
+
+    if (currentUserId && requestedUserId === currentUserId) {
+      const cached = await getMatchesCache(currentUserId, "profile_full");
+      if (cached) return res.status(200).json(cached);
+    }
+
     const user = await User.findById(req.params.userId).select(
       "name username email avatar bio location phone detailedAddress gallery gender lookingFor questionsbycategoriesResults subscription birthday voiceIntro"
-    );
+    ).lean();
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (currentUserId && requestedUserId === currentUserId) {
+      await setMatchesCache(currentUserId, "profile_full", user, PROFILE_FULL_TTL);
+    }
     res.status(200).json(user);
   } catch (error) {
-    res.status(500).json({ message: "Error fetching user", error });
+    console.error("Get User By ID Error:", error);
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ message: errorMessage });
   }
 };
 
@@ -63,7 +80,11 @@ export const getUserInformation = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
   } catch (error) {
-    res.status(500).json({ message: "Error fetching user", error });
+    console.error("Get User Information Error:", error);
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ message: errorMessage });
   }
 };
 
@@ -78,13 +99,29 @@ export const updateProfileInfo = async (req, res) => {
     const {
       name, bio, phone, country, city, countryCode,
       gender, lookingFor, birthday, avatar, voiceIntro,
+      location,
     } = req.body;
 
     const updateData = {
       name, bio, phone,
-      location: { country, city, countryCode },
       gender, lookingFor, birthday,
     };
+
+    // Handle location update - preserve existing coordinates and type if not provided
+    if (country !== undefined || city !== undefined || countryCode !== undefined || location) {
+      const locationUpdate = {
+        type: (location && location.type) ? location.type : (currentUser.location?.type || "Point"),
+        coordinates: (location && location.coordinates && Array.isArray(location.coordinates) && location.coordinates.length === 2) 
+          ? location.coordinates 
+          : (currentUser.location?.coordinates && Array.isArray(currentUser.location.coordinates) && currentUser.location.coordinates.length === 2)
+            ? currentUser.location.coordinates
+            : [0, 0],
+        country: country !== undefined ? country : (currentUser.location?.country || ""),
+        city: city !== undefined ? city : (currentUser.location?.city || ""),
+      };
+      
+      updateData.location = locationUpdate;
+    }
 
     // 1. Handle Avatar
     if (avatar && avatar.startsWith("data:image")) {
@@ -100,31 +137,89 @@ export const updateProfileInfo = async (req, res) => {
         });
         updateData.avatar = uploadRes.secure_url;
       } catch (err) {
-        console.error(err);
-        return res.status(500).json({ message: "Avatar upload failed" });
+        console.error("Avatar Upload Error:", err);
+        const errorMessage = process.env.NODE_ENV === 'production' 
+          ? "Avatar upload failed. Please try again." 
+          : err.message;
+        return res.status(500).json({ message: errorMessage });
       }
     } else if (avatar) {
       updateData.avatar = avatar;
     }
 
     // 2. Handle Voice Intro
-    if (voiceIntro && voiceIntro.startsWith("data:audio")) {
+    if (voiceIntro && typeof voiceIntro === "string" && voiceIntro.startsWith("data:audio")) {
       // Delete old voice if exists
       if (currentUser.voiceIntro) {
         await deleteFromCloudinary(currentUser.voiceIntro);
       }
 
       try {
-        const uploadRes = await cloudinary.uploader.upload(voiceIntro, {
-          resource_type: "video",
-          folder: "unlock_me_voices",
-          public_id: `voice_${userId}_${Date.now()}`,
-          overwrite: true,
+        // Validate data URI format
+        if (!voiceIntro.includes('base64,')) {
+          return res.status(400).json({ message: "Invalid audio data format" });
+        }
+        
+        // Extract base64 data and MIME type
+        // Handle formats like: "data:audio/webm;codecs=opus;base64,..." or "data:audio/webm;base64,..."
+        const base64Index = voiceIntro.indexOf('base64,');
+        if (base64Index === -1) {
+          return res.status(400).json({ message: "Invalid audio data URI format" });
+        }
+        
+        const base64Data = voiceIntro.substring(base64Index + 7); // Skip "base64,"
+        
+        // Extract audio format (webm, ogg, mp4, etc.)
+        const formatMatch = voiceIntro.match(/data:audio\/([^;]+)/);
+        const audioFormat = formatMatch ? formatMatch[1] : 'webm';
+        
+        // Check approximate size (base64 is ~33% larger than binary)
+        const sizeInBytes = (base64Data.length * 3) / 4;
+        const maxSize = 10 * 1024 * 1024; // 10MB limit
+        
+        if (sizeInBytes > maxSize) {
+          return res.status(400).json({ message: "Audio file is too large. Maximum size is 10MB." });
+        }
+        
+        // Convert base64 to buffer for Cloudinary upload
+        const audioBuffer = Buffer.from(base64Data, 'base64');
+        
+        // Upload to Cloudinary using upload_stream (better for binary data)
+        const uploadPromise = new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+            {
+              resource_type: "video",
+              folder: "unlock_me_voices",
+              public_id: `voice_${userId}_${Date.now()}`,
+              overwrite: true,
+            },
+            (error, result) => {
+              if (error) {
+                console.error("Cloudinary upload stream error:", error);
+                reject(error);
+              } else {
+                resolve(result);
+              }
+            }
+          );
+          
+          // Write buffer to stream
+          uploadStream.end(audioBuffer);
         });
+        
+        const uploadRes = await uploadPromise;
         updateData.voiceIntro = uploadRes.secure_url;
       } catch (err) {
         console.error("Voice upload error:", err);
-        return res.status(500).json({ message: "Voice upload failed" });
+        console.error("Error details:", {
+          message: err.message,
+          http_code: err.http_code,
+          name: err.name,
+        });
+        const errorMessage = process.env.NODE_ENV === 'production' 
+          ? "Voice upload failed. Please try again." 
+          : err.message || (err.http_code ? `Cloudinary error: ${err.http_code}` : "Voice upload failed");
+        return res.status(500).json({ message: errorMessage });
       }
     } else if (voiceIntro === "") {
       // User explicitly removed voice
@@ -132,6 +227,9 @@ export const updateProfileInfo = async (req, res) => {
         await deleteFromCloudinary(currentUser.voiceIntro);
       }
       updateData.voiceIntro = "";
+    } else if (voiceIntro && typeof voiceIntro === "string" && !voiceIntro.startsWith("data:")) {
+      // If it's already a Cloudinary URL, just use it
+      updateData.voiceIntro = voiceIntro;
     }
 
     const updatedUser = await User.findByIdAndUpdate(
@@ -140,10 +238,23 @@ export const updateProfileInfo = async (req, res) => {
       { new: true, runValidators: true }
     ).select("-password");
 
+    // ✅ Invalidate caches so Explore/Swipe and my profile show fresh data
+    const { invalidateUserCache, invalidateExploreCache } = await import("../../utils/cacheHelper.js");
+    const { invalidateUserCaches } = await import("../../utils/redisMatchHelper.js");
+    await Promise.all([
+      invalidateUserCache(userId),
+      invalidateExploreCache(userId),
+      invalidateMatchesCache(userId, "profile_full"),
+      invalidateUserCaches(userId),
+    ]).catch((err) => console.error("Cache invalidation error:", err));
+
     res.status(200).json(updatedUser);
   } catch (error) {
     console.error("Update profile error:", error);
-    res.status(500).json({ error: error.message });
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ error: errorMessage });
   }
 };
 
@@ -158,12 +269,30 @@ export const updatePassword = async (req, res) => {
     if (!isMatch)
       return res.status(400).json({ message: "Current password incorrect" });
 
+    // ✅ Security Fix: Validate password strength
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{6,}$/;
+    if (!passwordRegex.test(newPassword)) {
+      return res.status(400).json({ 
+        message: "Password must contain uppercase, lowercase, number and special character" 
+      });
+    }
+    
     user.password = await bcrypt.hash(newPassword, 12);
     await user.save();
+    
+    const { invalidateUserCache } = await import("../../utils/cacheHelper.js");
+    await Promise.all([
+      invalidateUserCache(userId),
+      invalidateMatchesCache(userId, "profile_full"),
+    ]).catch((err) => console.error("Cache invalidation error:", err));
 
     res.status(200).json({ message: "Password updated successfully" });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Update Password Error:", error);
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ message: errorMessage });
   }
 };
 
@@ -213,9 +342,14 @@ export const updateGallery = async (req, res) => {
     user.gallery = processedImages;
     await user.save();
 
+    invalidateMatchesCache(userId, "profile_full").catch((err) => console.error("Cache invalidation error:", err));
     res.status(200).json(user.gallery);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Update Gallery Error:", error);
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ message: errorMessage });
   }
 };
 
@@ -254,13 +388,17 @@ export const updateCategoryAnswers = async (req, res) => {
     user.dna = newDNA;
 
     await user.save();
+    invalidateMatchesCache(userId, "profile_full").catch((err) => console.error("Cache invalidation error:", err));
     res.status(200).json({ 
         questionsResults: user.questionsbycategoriesResults, 
         dna: newDNA 
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
+    console.error("Update Category Answers Error:", error);
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ error: errorMessage });
   }
 };
 
@@ -296,14 +434,20 @@ export const forgotPassword = async (req, res) => {
 
     if (error) {
       console.error("Resend Error:", error);
-      return res.status(500).json({ message: "Error sending email", error });
+      const errorMessage = process.env.NODE_ENV === 'production' 
+        ? "Error sending email. Please try again later." 
+        : error.message;
+      return res.status(500).json({ message: errorMessage });
     }
 
     res.status(200).json({ message: "New password sent to your email." });
 
   } catch (error) {
     console.error("Forgot Password Error:", error);
-    res.status(500).json({ error: error.message });
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ error: errorMessage });
   }
 };
 
@@ -379,7 +523,10 @@ export const deleteAccount = async (req, res) => {
     res.status(200).json({ message: "Account and all associated data permanently deleted." });
   } catch (error) {
     console.error("Delete account error:", error);
-    res.status(500).json({ error: error.message });
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ error: errorMessage });
   }
 };
 
@@ -389,7 +536,6 @@ export const getMatchesDashboard = async (req, res) => {
     const currentUserId = req.user.userId;
     const me = await User.findById(currentUserId)
         .select("likedUsers superLikedUsers likedBy superLikedBy subscription matches");
-        console.log(me);
 
     if (!me) return res.status(404).json({ message: "User not found" });
 
@@ -412,7 +558,6 @@ export const getMatchesDashboard = async (req, res) => {
     const mutualMatches = await User.find({ _id: { $in: mutualIds } })
         .select(populateFields)
         .lean();
-        console.log(mutualMatches);
 
     // --- B. SENT LIKES ---
     // (کسانی که من لایک کردم)
@@ -466,6 +611,9 @@ export const getMatchesDashboard = async (req, res) => {
 
   } catch (error) {
     console.error("Dashboard Error:", error);
-    res.status(500).json({ message: "Server error" });
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ message: errorMessage });
   }
 };

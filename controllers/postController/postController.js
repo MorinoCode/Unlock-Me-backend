@@ -4,7 +4,6 @@ import Like from "../../models/Like.js";
 import {
   getMatchesCache,
   setMatchesCache,
-  invalidateMatchesCache,
   invalidateFeedCache,
 } from "../../utils/cacheHelper.js";
 import cloudinary from "../../config/cloudinary.js"; // وارد کردن تنطیمات کلودیناری

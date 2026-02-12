@@ -1,37 +1,13 @@
 import User from "../models/User.js";
 import { setPotentialMatchesPool, batchSetCompatibilityScores } from "../utils/redisMatchHelper.js";
+import { calculateCompatibility } from "../utils/matchUtils.js";
 import redisClient from "../config/redis.js";
 
-const BATCH_SIZE = 10; 
-const CONCURRENT_USERS = 2; 
 const CANDIDATE_LIMIT = 500; // For legacy findMatchesForUser
-const ANALYSIS_LIMIT = 150; // For new generateAnalysisData
 const STORE_LIMIT = 200; // Store top 200 matches
 
-let isRunning = false;
-let processedCount = 0;
 
-// Helper for sequential processing with concurrency
-async function processWithConcurrency(items, concurrency, processor) {
-  const results = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    const batchResults = await Promise.all(
-      batch.map(item => processor(item).catch(err => {
-        console.error(`Error processing user ${item._id}:`, err.message);
-        return null;
-      }))
-    );
-    results.push(...batchResults.filter(r => r !== null));
-    
-    if (global.gc) {
-      global.gc();
-    }
-    
-    await new Promise(resolve => setTimeout(resolve, 500));
-  }
-  return results;
-}
+// Main Worker Function
 
 // ✅ NEW: On-Demand Analysis Data Generator (150 fetch, 5 sections)
 export async function generateAnalysisData(userId) {
@@ -229,8 +205,7 @@ export async function findMatchesForUser(currentUser) {
         return;
     }
 
-    const myDNA = currentUser.dna || { Logic: 50, Emotion: 50, Energy: 50, Creativity: 50, Discipline: 50 };
-    
+    // ✅ Exclusion List: Matches + Likes + Dislikes
     // ✅ Exclusion List: Matches + Likes + Dislikes
     const excludedIds = [
         currentUser._id,

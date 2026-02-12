@@ -4,41 +4,23 @@
  */
 
 import User from "../../models/User.js";
-import mongoose from "mongoose";
 import {
-  calculateCompatibility,
-  calculateUserDNA,
-  generateMatchInsights,
 } from "../../utils/matchUtils.js";
 import { emitNotification } from "../../utils/notificationHelper.js";
 import {
   getSwipeLimit,
   getSuperLikeLimit,
-  getVisibilityThreshold,
 } from "../../utils/subscriptionRules.js";
 import {
   getMatchesCache,
   setMatchesCache,
-  invalidateUserCache,
-  invalidateMatchesCache,
-  invalidateExploreCache,
 } from "../../utils/cacheHelper.js";
 import {
-  getCompatibilityScore,
-  setCompatibilityScore,
   getTopCandidates,
   addExcludedUser,
   getFromPotentialPool,
-  invalidateUserCaches,
 } from "../../utils/redisMatchHelper.js";
 
-const isSameDay = (d1, d2) => {
-  return (
-    d1.getFullYear() === d2.getFullYear() &&
-    d1.getMonth() === d2.getMonth() &&
-    d1.getDate() === d2.getDate()
-  );
-};
 
 /**
  * ✅ Optimized: Get Swipe Cards with Redis
@@ -65,8 +47,6 @@ export const getSwipeCards = async (req, res) => {
 
     if (!me) return res.status(404).json({ message: "User not found" });
 
-    const userPlan = me.subscription?.plan || "free";
-    const visibilityThreshold = getVisibilityThreshold(userPlan);
 
     const myCountry = me.location?.country;
     if (!myCountry) {
@@ -230,40 +210,6 @@ async function getCandidatesFromDB(me, excludeIds, limit) {
   return candidates;
 }
 
-/**
- * ✅ Helper for Transaction Retry
- */
-const withTransactionRetry = async (session, operation) => {
-  const MAX_RETRIES = 3;
-  let attempt = 0;
-
-  while (attempt < MAX_RETRIES) {
-    try {
-      if (!session.inTransaction()) {
-        session.startTransaction();
-      }
-      const result = await operation();
-      await session.commitTransaction();
-      return result;
-    } catch (error) {
-      if (session.inTransaction()) {
-        await session.abortTransaction();
-      }
-
-      const isTransientError = error.errorLabels && error.errorLabels.includes('TransientTransactionError');
-      const isWriteConflict = error.code === 112 || error.codeName === 'WriteConflict';
-
-      if ((isTransientError || isWriteConflict) && attempt < MAX_RETRIES - 1) {
-        attempt++;
-        const backoff = Math.pow(2, attempt) * 100 + Math.random() * 100; // Exponential backoff + jitter
-        console.warn(`[Swipe] ⚠️ Transaction conflict. Retrying attempt ${attempt}/${MAX_RETRIES} in ${backoff.toFixed(0)}ms...`);
-        await new Promise(resolve => setTimeout(resolve, backoff));
-      } else {
-        throw error;
-      }
-    }
-  }
-};
 
 /**
  * ✅ Optimized: Handle Swipe Action

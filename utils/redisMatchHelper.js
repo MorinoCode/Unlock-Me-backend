@@ -200,15 +200,30 @@ export const addToRankingPool = async (
   }
 };
 
+/**
+ * ✅ Get Top Candidates from Ranking Pool
+ * (Interface for potential future ranking service)
+ * @param {string} _userId
+ * @param {string} _country
+ * @param {string} _gender
+ * @param {number} _limit
+ * @param {Array} _excludeIds
+ */
 export const getTopCandidates = async (
-  userId,
-  country,
-  gender,
-  limit = 20,
-  excludeIds = []
+  _userId,
+  _country,
+  _gender,
+  _limit = 20,
+  _excludeIds = []
 ) => {
-    // ... (Existing implementation placeholder if needed, preserving existing code below)
-    return [];
+  // Currently returns empty to trigger DB fallback
+  // Silencing unused-vars for placeholder arguments
+  void _userId;
+  void _country;
+  void _gender;
+  void _limit;
+  void _excludeIds;
+  return [];
 };
 
 /**

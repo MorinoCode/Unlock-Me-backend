@@ -284,7 +284,10 @@ export async function loadMoreSoulmates(userId, page = 1, limit = 20, userPlan =
     const paginatedUsers = limitedSoulmates.slice(skip, skip + limit);
 
     // Remove matchScore from response (keep it internal)
-    const cleanUsers = paginatedUsers.map(({ matchScore, ...user }) => user);
+    const cleanUsers = paginatedUsers.map((u) => {
+      const { matchScore: _, ...rest } = u; // eslint-disable-line no-unused-vars
+      return rest;
+    });
 
     return {
       users: cleanUsers,

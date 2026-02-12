@@ -2,7 +2,6 @@
 import { Worker } from "bullmq";
 import { addToExploreIndex, removeFromExploreIndex } from "../utils/redisMatchHelper.js";
 import User from "../models/User.js";
-import redisClient from "../config/redis.js";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 
@@ -62,7 +61,7 @@ const exploreWorker = new Worker("explore-queue", workerHandler, {
     concurrency: 5 // Parallel processing
 });
 
-exploreWorker.on("completed", (job) => {
+exploreWorker.on("completed", () => {
     // console.log(`[ExploreWorker] Job ${job.id} completed`);
 });
 

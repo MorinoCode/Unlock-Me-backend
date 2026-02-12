@@ -11,7 +11,6 @@ export const addComment = async (req, res) => {
   try {
     const { postId } = req.params;
     const { content, parentCommentId } = req.body;
-    const io = req.app.get("io");
 
     const user = await User.findById(req.user.userId).select("-password");
     if (!user)
@@ -81,6 +80,7 @@ export const addComment = async (req, res) => {
 
 export const getPostComments = async (req, res) => {
   try {
+    const { postId } = req.params;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
 

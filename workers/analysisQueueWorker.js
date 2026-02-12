@@ -3,7 +3,6 @@ import redisClient from "../config/redis.js";
 import User from "../models/User.js";
 import { generateAnalysisData } from "./exploreMatchWorker.js";
 import { generateFeedForUser } from "./swipeFeedWorker.js";
-import mongoose from "mongoose";
 
 // Duplicate Redis connection for connection sharing if needed, 
 // though BullMQ manages its own. We need redisClient for Pub/Sub or DB updates.

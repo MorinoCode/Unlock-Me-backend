@@ -14,7 +14,7 @@ import connectDB from "./config/db.js"; // ✅ استفاده از کانکشن 
 import redisClient from "./config/redis.js";
 import { validateEnv } from "./config/env.js"; // ✅ Critical Fix: Environment validation
 import jwt from "jsonwebtoken"; // ✅ Security Fix: For socket authentication
-import cookie from "cookie"; // ✅ Security Fix: For parsing socket cookies
+import * as cookie from "cookie"; // ✅ Security Fix: For parsing socket cookies
 
 // Routes
 import usersRoutes from "./routes/usersRoutes.js";

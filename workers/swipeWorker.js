@@ -6,11 +6,7 @@ import {
     invalidateExploreCache 
 } from "../utils/cacheHelper.js";
 import { invalidateUserCaches } from "../utils/redisMatchHelper.js";
-
-const connection = {
-    host: process.env.REDIS_HOST || "127.0.0.1",
-    port: process.env.REDIS_PORT || 6379,
-};
+import { bullMQConnection } from "../config/redis.js";
 
 const swipeWorkerHandler = async (job) => {
     const { userId, targetUserId, action, isMatch } = job.data;
@@ -79,7 +75,7 @@ const swipeWorkerHandler = async (job) => {
 };
 
 const swipeWorker = new Worker("swipe-action-queue", swipeWorkerHandler, {
-    connection,
+    connection: bullMQConnection,
     concurrency: 10 // Higher concurrency as these are simple DB writes
 });
 

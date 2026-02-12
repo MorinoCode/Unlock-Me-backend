@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import User from "../models/User.js";
-import redisClient from "../config/redis.js";
+import redisClient, { bullMQConnection } from "../config/redis.js";
 import { calculateUserDNA } from "../utils/matchUtils.js";
 import { invalidateMatchesCache } from "../utils/cacheHelper.js";
 
@@ -54,10 +54,7 @@ const workerHandler = async (job) => {
 };
 
 const onboardingWorker = new Worker("onboarding-queue", workerHandler, {
-  connection: {
-    host: process.env.REDIS_HOST || "127.0.0.1",
-    port: process.env.REDIS_PORT || 6379,
-  },
+  connection: bullMQConnection,
   concurrency: 5,
 });
 

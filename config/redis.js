@@ -3,12 +3,24 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+const rawUrl = (process.env.REDIS_URL || process.env.REDIS_INTERNAL_URL || process.env.REDIS_EXTERNAL_URL || "").trim();
+
+console.log("\n--- [CRITICAL REDIS DEBUG] ---");
+console.log("Current NODE_ENV:", process.env.NODE_ENV);
+console.log("Detected URL (masked):", rawUrl ? (rawUrl.substring(0, 15) + "...") : "NONE");
+if (!rawUrl) {
+  console.log("⚠️ WARNING: No REDIS_URL detected. Falling back to localhost/env-parts.");
+  console.log("REDIS_HOST:", process.env.REDIS_HOST);
+  console.log("REDIS_PORT:", process.env.REDIS_PORT);
+}
+console.log("------------------------------\n");
+
 // ✅ Shared connection config for BullMQ & redis client
-export const redisConnectionConfig = process.env.REDIS_URL
+export const redisConnectionConfig = rawUrl
   ? {
-      url: process.env.REDIS_URL,
+      url: rawUrl,
       socket: {
-        tls: process.env.REDIS_URL.startsWith("rediss://"),
+        tls: rawUrl.toLowerCase().startsWith("rediss://"),
         connectTimeout: 50000,
         keepAlive: 10000,
         reconnectStrategy: (retries) => {
@@ -23,14 +35,14 @@ export const redisConnectionConfig = process.env.REDIS_URL
   : {
       socket: {
         host: process.env.REDIS_HOST || "127.0.0.1",
-        port: process.env.REDIS_PORT || 6379,
+        port: parseInt(process.env.REDIS_PORT) || 6379,
       }
     };
 
 const redisClient = createClient(redisConnectionConfig);
 
-// ✅ BullMQ connection (URL string is easiest for ioredis/BullMQ)
-export const bullMQConnection = process.env.REDIS_URL || {
+// ✅ BullMQ connection
+export const bullMQConnection = rawUrl || {
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: parseInt(process.env.REDIS_PORT) || 6379,
 };

@@ -13,6 +13,8 @@ import mongoose from "mongoose";
 import connectDB from "./config/db.js"; // ✅ استفاده از کانکشن حرفه‌ای
 import redisClient from "./config/redis.js";
 import { validateEnv } from "./config/env.js"; // ✅ Critical Fix: Environment validation
+import jwt from "jsonwebtoken"; // ✅ Security Fix: For socket authentication
+import cookie from "cookie"; // ✅ Security Fix: For parsing socket cookies
 
 // Routes
 import usersRoutes from "./routes/usersRoutes.js";
@@ -30,6 +32,7 @@ import notificationRoutes from "./routes/notificationRoutes.js";
 import webhookRoutes from "./routes/webhookRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import goDateRoutes from "./routes/goDateRoutes.js";
+import contactRoutes from "./routes/contactRoutes.js";
 
 import { handleSocketConnection } from "./sockets/socketHandler.js";
 
@@ -37,13 +40,74 @@ import { handleSocketConnection } from "./sockets/socketHandler.js";
 validateEnv();
 
 // ✅ Workers (Background Jobs)
-// ✅ Scalability Optimization: Use optimized match worker with Redis
-import "./workers/matchWorkerOptimized.js"; // Internal Match Job - runs every 4 hours (with Redis)
+import "./workers/swipeFeedWorker.js"; // Swipe Feed Worker - runs every 6 hours
+// matchWorker.js is now on-demand only (no cron) - triggered via generateAnalysisData()
 import "./workers/redisKeepAliveWorker.js"; // Redis Keep-Alive - runs every 6 hours
 import "./workers/arrayCleanupWorker.js"; // Array Cleanup - runs daily at 2 AM
+import "./workers/trialExpirationWorker.js"; // ✅ Trial Expiration - runs every hour
+import "./workers/analysisQueueWorker.js"; // ✅ NEW: BullMQ Analysis Worker
+import "./workers/goDateWorker.js"; // ✅ Enterprise GoDate Worker
+import "./workers/goDateCleanupCron.js"; // ✅ Enterprise GoDate Cleanup scheduler
+import "./workers/swipeWorker.js"; // ✅ NEW: High-Scale Swipe Worker
+import "./workers/notificationWorker.js"; // ✅ NEW: Enterprise Notification Worker
+import "./workers/mediaWorker.js"; // ✅ NEW: Enterprise Media Worker
+import "./workers/onboardingWorker.js"; // ✅ NEW: Enterprise Onboarding Worker
+
+
+import { Worker } from "worker_threads";
+
+// ✅ Start Explore Worker (Background Thread)
+if (process.env.NODE_ENV !== 'test') {
+  new Worker(new URL("./workers/exploreWorker.js", import.meta.url));
+}
 
 // ✅ اتصال به دیتابیس قبل از هر کاری
 connectDB();
+
+// ✅ Setup Redis Pub/Sub for Worker Notifications
+const setupRedisSubscriber = async () => {
+  const subscriber = redisClient.duplicate();
+  await subscriber.connect();
+  
+  await subscriber.subscribe("job-events", (message) => {
+    try {
+      const event = JSON.parse(message);
+      const io = app.get("io");
+      
+      if (io && event.userId) {
+        if (event.type === 'ANALYSIS_COMPLETE') {
+          console.log(`🔔 [Socket] Notifying user ${event.userId}: Analysis Complete`);
+          io.to(event.userId).emit("analysis_complete", { 
+            ready: true, 
+            duration: event.duration 
+          });
+        } else if (event.type === 'ANALYSIS_FAILED') {
+          console.log(`🔔 [Socket] Notifying user ${event.userId}: Analysis Failed`);
+          io.to(event.userId).emit("analysis_error", { 
+            message: event.error 
+          });
+        } else if (event.type === 'NEW_NOTIFICATION') {
+          console.log(`🔔 [Socket] Emit Notification to user ${event.userId}`);
+          io.to(event.userId).emit("new_notification", event.notification);
+        } else if (event.type === 'MEDIA_PROCESSED') {
+          console.log(`🖼️ [Socket] Emit Media Processed to user ${event.userId}`);
+          io.to(event.userId).emit("media_processed", {
+            mediaType: event.mediaType,
+            payload: event.payload
+          });
+        } else if (event.type === 'ONBOARDING_PROCESSED') {
+          console.log(`🧬 [Socket] Emit Onboarding Processed to user ${event.userId}`);
+          io.to(event.userId).emit("onboarding_processed", event.payload);
+        }
+      }
+    } catch (err) {
+      console.error("❌ Redis Pub/Sub Error:", err);
+    }
+  });
+  console.log("✅ [Server] Listening for Job Events...");
+};
+
+setupRedisSubscriber();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -68,21 +132,14 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // ✅ Fix 10: Better origin validation
-    // Allow requests with no origin (like mobile apps or Postman)
+    // ✅ Security Fix #13: Allow requests with no origin (mobile apps, React Native, cURL)
     if (!origin) {
-      // In production, you might want to be stricter
-      if (process.env.NODE_ENV === "production") {
-        console.warn("⚠️ Request with no origin in production");
-        callback(new Error("CORS_ERROR"));
-        return;
-      }
       callback(null, true);
       return;
     }
 
-    // Check against allowed origins
-    if (allowedOrigins.includes(origin) || origin.endsWith(".vercel.app")) {
+    // ✅ Security Fix #10: Removed wildcard *.vercel.app — only allow specific origins
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       console.error(`🚫 Blocked by CORS: ${origin}`);
@@ -127,6 +184,9 @@ app.use("/api/user/signin", strictLimiter);
 app.use("/api/user/signup", strictLimiter);
 app.use("/api/user/forgot-password", strictLimiter);
 app.use("/api/user/profile/password", strictLimiter);
+// ✅ Improvement #23: Rate limiting for block/unblock endpoints
+app.use("/api/user/block", strictLimiter);
+app.use("/api/user/unblock", strictLimiter);
 
 // ==========================================
 // 3. BODY PARSING
@@ -178,10 +238,10 @@ app.use(hpp());
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
+      // ✅ Security Fix #10: Same restricted CORS for Socket.IO
       if (
         !origin ||
-        allowedOrigins.includes(origin) ||
-        origin.endsWith(".vercel.app")
+        allowedOrigins.includes(origin)
       ) {
         callback(null, true);
       } else {
@@ -193,6 +253,25 @@ const io = new Server(server, {
   },
 });
 
+// ✅ Redis Adapter Setup for Horizontal Scaling
+// This allows multiple server instances to broadcast events to each other.
+const setupSocketRedisAdapter = async () => {
+  try {
+    const { createAdapter } = await import("@socket.io/redis-adapter");
+    const pubClient = redisClient.duplicate();
+    const subClient = redisClient.duplicate();
+
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log("✅ [Socket.IO] Redis Adapter connected (Multi-Server Ready)");
+  } catch (err) {
+    console.error("❌ [Socket.IO] Redis Adapter Failed:", err);
+  }
+};
+
+setupSocketRedisAdapter();
+
 app.set("io", io);
 
 const userSocketMap = new Map();
@@ -200,6 +279,40 @@ const userSocketMap = new Map();
 export const getReceiverSocketId = (receiverId) => {
   return userSocketMap.get(receiverId);
 };
+
+// ✅ Security Fix #9: Socket authentication middleware
+io.use((socket, next) => {
+  try {
+    const rawCookies = socket.handshake.headers.cookie;
+    if (!rawCookies) {
+      return next(new Error("Authentication required"));
+    }
+    const cookies = cookie.parse(rawCookies);
+    const token = cookies["unlock-me-token"] || cookies["unlock-me-refresh-token"];
+    if (!token) {
+      return next(new Error("Authentication required"));
+    }
+    // Try access token first, then refresh token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      // If access token failed, try refresh token secret
+      const refreshToken = cookies["unlock-me-refresh-token"];
+      if (refreshToken) {
+        decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+      } else {
+        return next(new Error("Invalid token"));
+      }
+    }
+    socket.userId = decoded.userId?.toString();
+    socket.handshake.query.userId = socket.userId;
+    next();
+  } catch (err) {
+    console.error("Socket auth error:", err.message);
+    next(new Error("Authentication failed"));
+  }
+});
 
 io.on("connection", (socket) => {
   handleSocketConnection(io, socket, userSocketMap);
@@ -222,6 +335,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/blind-date", blindDateRoutes);
 app.use("/api/go-date", goDateRoutes);
+app.use("/api/contact", contactRoutes);
 
 app.get("/ping", (req, res) => {
   res.status(200).send("pong 🏓");

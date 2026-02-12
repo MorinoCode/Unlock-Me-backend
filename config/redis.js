@@ -13,6 +13,17 @@ if (!process.env.REDIS_URL) {
 const redisClient = process.env.REDIS_URL
   ? createClient({
       url: process.env.REDIS_URL,
+      socket: {
+        connectTimeout: 50000, 
+        keepAlive: 5000,
+        reconnectStrategy: (retries) => {
+            if (retries > 20) {
+                console.error("Redis: Max retries exceeded. Giving up.");
+                return new Error("Max retries exceeded");
+            }
+            return Math.min(retries * 50, 2000);
+        }
+      }
     })
   : null;
 

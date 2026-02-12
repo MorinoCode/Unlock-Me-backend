@@ -162,24 +162,44 @@ export const getPromoBannerConfig = (plan) => {
 export const getMatchListLimit = (plan, type) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
 
+  // Mutual matches are always unlimited
   if (type === "mutual") return Infinity;
 
+  // "Who Liked You" (Incoming Likes)
   if (type === "incoming") {
     switch (normalizedPlan) {
       case PLANS.DIAMOND:
-      case PLANS.PLATINUM:
-      case PLANS.GOLD:
         return Infinity;
+      case PLANS.PLATINUM:
+        return 20;
+      case PLANS.GOLD:
+        return 10;
       case PLANS.FREE:
       default:
-        return 0; // Locked for free
+        return 1;
     }
   }
 
+  // Super Likes Received
+  if (type === "superlikes") {
+    switch (normalizedPlan) {
+      case PLANS.DIAMOND:
+        return Infinity;
+      case PLANS.PLATINUM:
+        return 10;
+      case PLANS.GOLD:
+        return 5;
+      case PLANS.FREE:
+      default:
+        return 1;
+    }
+  }
+
+  // Sent Likes (Users I liked)
   if (type === "sent") {
     switch (normalizedPlan) {
       case PLANS.DIAMOND:
-        return Infinity; // ✅ Unlimited Sent Likes List
+        return Infinity;
       case PLANS.PLATINUM:
         return 90;
       case PLANS.GOLD:

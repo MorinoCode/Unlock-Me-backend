@@ -4,12 +4,16 @@ import cloudinary from "../../config/cloudinary.js";
 import { Resend } from "resend"; 
 import crypto from "crypto";
 import { getPasswordResetTemplate } from "../../templates/emailTemplates.js";
-import { calculateUserDNA } from "../../utils/matchUtils.js";
+import { calculateUserDNA, calculateCompatibility } from "../../utils/matchUtils.js";
 import Conversation from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
 import Post from "../../models/Post.js";
+import Notification from "../../models/notification.js";
+import GoDate from "../../models/GoDate.js";
+import GoDateApply from "../../models/GoDateApply.js";
 import { getMatchListLimit } from "../../utils/matchUtils.js";
 import { getMatchesCache, setMatchesCache, invalidateMatchesCache } from "../../utils/cacheHelper.js";
+import { mediaQueue } from "../../config/queue.js";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const PROFILE_FULL_TTL = 300; // 5 min
@@ -20,17 +24,16 @@ const deleteFromCloudinary = async (url) => {
   if (!url) return;
   
   try {
-    // Example URL: https://res.cloudinary.com/cloudname/image/upload/v164000/folder_name/filename.jpg
-    // We need: folder_name/filename
-    
-    // Split the URL by segments
-    const parts = url.split('/');
-    const filenameWithExt = parts.pop();
-    const folder = parts.pop(); // Assumes the folder is immediately before the filename
-    const filename = filenameWithExt.split('.')[0];
-    
-    // Construct Public ID
-    const publicId = `${folder}/${filename}`;
+    // ✅ Improvement #21: Robust URL parsing using regex
+    // Extracts public ID from URLs like:
+    //   https://res.cloudinary.com/cloud/image/upload/v123/folder/file.jpg
+    //   https://res.cloudinary.com/cloud/video/upload/v123/folder/sub/file.webm
+    const match = url.match(/\/upload\/(?:v\d+\/)?(.+)\.\w+$/);
+    if (!match || !match[1]) {
+      console.warn(`Could not extract public ID from URL: ${url}`);
+      return;
+    }
+    const publicId = match[1];
     
     // Determine resource type
     const resourceType = url.includes("/video/") ? "video" : "image";
@@ -61,7 +64,20 @@ export const getUserById = async (req, res) => {
     if (currentUserId && requestedUserId === currentUserId) {
       await setMatchesCache(currentUserId, "profile_full", user, PROFILE_FULL_TTL);
     }
-    res.status(200).json(user);
+
+    // ✅ NEW: Calculate Match Score if viewing another user
+    let matchScore = null;
+    if (currentUserId && requestedUserId !== currentUserId) {
+      const currentUser = await User.findById(currentUserId).select(
+        "location lookingFor dna birthday interests gender questionsbycategoriesResults"
+      ).lean();
+
+      if (currentUser) {
+        matchScore = calculateCompatibility(currentUser, user);
+      }
+    }
+
+    res.status(200).json({ ...user, matchScore });
   } catch (error) {
     console.error("Get User By ID Error:", error);
     const errorMessage = process.env.NODE_ENV === 'production' 
@@ -74,8 +90,10 @@ export const getUserById = async (req, res) => {
 // --- Get Current User Info (Private) ---
 export const getUserInformation = async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId).select(
-      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro likedBy likedUsers dislikedUsers superLikedUsers superLikedBy usage"
+    if (!req.user) return res.status(200).json(null);
+
+    const user = await User.findById(req.user.userId || req.user.id).select(
+      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro likedBy likedUsers dislikedUsers superLikedUsers superLikedBy blockedUsers blockedBy usage potentialMatches lastMatchCalculation"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
@@ -123,101 +141,26 @@ export const updateProfileInfo = async (req, res) => {
       updateData.location = locationUpdate;
     }
 
-    // 1. Handle Avatar
+    // 1. Handle Avatar (ASYNC)
     if (avatar && avatar.startsWith("data:image")) {
-      // Delete old avatar if it's not the default
-      if (currentUser.avatar && !currentUser.avatar.includes("default-avatar")) {
-         await deleteFromCloudinary(currentUser.avatar);
-      }
-
-      try {
-        const uploadRes = await cloudinary.uploader.upload(avatar, {
-          folder: "unlock_me_avatars",
-          transformation: [{ width: 500, height: 500, crop: "fill" }],
-        });
-        updateData.avatar = uploadRes.secure_url;
-      } catch (err) {
-        console.error("Avatar Upload Error:", err);
-        const errorMessage = process.env.NODE_ENV === 'production' 
-          ? "Avatar upload failed. Please try again." 
-          : err.message;
-        return res.status(500).json({ message: errorMessage });
-      }
+      await mediaQueue.add("UPLOAD_AVATAR", {
+        type: "UPLOAD_AVATAR",
+        userId: userId.toString(),
+        data: { avatarBase64: avatar }
+      });
+      // We don't update avatar here, the worker will do it.
     } else if (avatar) {
       updateData.avatar = avatar;
     }
 
-    // 2. Handle Voice Intro
+    // 2. Handle Voice Intro (ASYNC)
     if (voiceIntro && typeof voiceIntro === "string" && voiceIntro.startsWith("data:audio")) {
-      // Delete old voice if exists
-      if (currentUser.voiceIntro) {
-        await deleteFromCloudinary(currentUser.voiceIntro);
-      }
-
-      try {
-        // Validate data URI format
-        if (!voiceIntro.includes('base64,')) {
-          return res.status(400).json({ message: "Invalid audio data format" });
-        }
-        
-        // Extract base64 data and MIME type
-        // Handle formats like: "data:audio/webm;codecs=opus;base64,..." or "data:audio/webm;base64,..."
-        const base64Index = voiceIntro.indexOf('base64,');
-        if (base64Index === -1) {
-          return res.status(400).json({ message: "Invalid audio data URI format" });
-        }
-        
-        const base64Data = voiceIntro.substring(base64Index + 7); // Skip "base64,"
-        
-        // Extract audio format (webm, ogg, mp4, etc.)
-        // Check approximate size (base64 is ~33% larger than binary)
-        const sizeInBytes = (base64Data.length * 3) / 4;
-        const maxSize = 10 * 1024 * 1024; // 10MB limit
-        
-        if (sizeInBytes > maxSize) {
-          return res.status(400).json({ message: "Audio file is too large. Maximum size is 10MB." });
-        }
-        
-        // Convert base64 to buffer for Cloudinary upload
-        const audioBuffer = Buffer.from(base64Data, 'base64');
-        
-        // Upload to Cloudinary using upload_stream (better for binary data)
-        const uploadPromise = new Promise((resolve, reject) => {
-          const uploadStream = cloudinary.uploader.upload_stream(
-            {
-              resource_type: "video",
-              folder: "unlock_me_voices",
-              public_id: `voice_${userId}_${Date.now()}`,
-              overwrite: true,
-            },
-            (error, result) => {
-              if (error) {
-                console.error("Cloudinary upload stream error:", error);
-                reject(error);
-              } else {
-                resolve(result);
-              }
-            }
-          );
-          
-          // Write buffer to stream
-          uploadStream.end(audioBuffer);
-        });
-        
-        const uploadRes = await uploadPromise;
-        updateData.voiceIntro = uploadRes.secure_url;
-      } catch (err) {
-        console.error("Voice upload error:", err);
-        console.error("Error details:", {
-          message: err.message,
-          http_code: err.http_code,
-          name: err.name,
-        });
-        const errorMessage = process.env.NODE_ENV === 'production' 
-          ? "Voice upload failed. Please try again." 
-          : err.message || (err.http_code ? `Cloudinary error: ${err.http_code}` : "Voice upload failed");
-        return res.status(500).json({ message: errorMessage });
-      }
+      await mediaQueue.add("UPLOAD_VOICE", {
+        type: "UPLOAD_VOICE",
+        userId: userId.toString(),
+        data: { voiceBase64: voiceIntro }
+      });
+      // We don't update voiceIntro here, the worker will do it.
     } else if (voiceIntro === "") {
       // User explicitly removed voice
       if (currentUser.voiceIntro) {
@@ -225,7 +168,6 @@ export const updateProfileInfo = async (req, res) => {
       }
       updateData.voiceIntro = "";
     } else if (voiceIntro && typeof voiceIntro === "string" && !voiceIntro.startsWith("data:")) {
-      // If it's already a Cloudinary URL, just use it
       updateData.voiceIntro = voiceIntro;
     }
 
@@ -237,15 +179,26 @@ export const updateProfileInfo = async (req, res) => {
 
     // ✅ Invalidate caches so Explore/Swipe and my profile show fresh data
     const { invalidateUserCache, invalidateExploreCache } = await import("../../utils/cacheHelper.js");
+    const { invalidateMatchesCache } = await import("../../utils/cacheHelper.js");
     const { invalidateUserCaches } = await import("../../utils/redisMatchHelper.js");
+    const { dispatchExploreSync } = await import("../../utils/workerDispatcher.js");
+
     await Promise.all([
       invalidateUserCache(userId),
       invalidateExploreCache(userId),
       invalidateMatchesCache(userId, "profile_full"),
       invalidateUserCaches(userId),
-    ]).catch((err) => console.error("Cache invalidation error:", err));
+      // ✅ Trigger Redis Index Update (Background)
+      dispatchExploreSync(userId, currentUser.toObject()), 
+    ]).catch((err) => console.error("Cache/Sync error:", err));
 
-    res.status(200).json(updatedUser);
+    const isProcessing = (avatar && avatar.startsWith("data:image")) || (voiceIntro && voiceIntro.startsWith("data:audio"));
+
+    res.status(200).json({
+      user: updatedUser,
+      status: isProcessing ? "processing" : "completed",
+      message: isProcessing ? "Profile data updated. Media is processing in background." : "Profile updated successfully"
+    });
   } catch (error) {
     console.error("Update profile error:", error);
     const errorMessage = process.env.NODE_ENV === 'production' 
@@ -306,41 +259,17 @@ export const updateGallery = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // A) Identify deleted images
-    // Any image in DB not present in new 'images' array is considered deleted
-    const imagesToDelete = user.gallery.filter(oldImg => !images.includes(oldImg));
+    // Queue Gallery Upload (ASYNC)
+    await mediaQueue.add("UPLOAD_GALLERY", {
+      type: "UPLOAD_GALLERY",
+      userId: userId.toString(),
+      data: { images }
+    });
 
-    // B) Remove deleted images from Cloudinary
-    for (const imgUrl of imagesToDelete) {
-      await deleteFromCloudinary(imgUrl);
-    }
-
-    // C) Upload new images (Base64)
-    const processedImages = await Promise.all(
-      images.map(async (img) => {
-        if (img.startsWith("data:image")) {
-          try {
-            const uploadRes = await cloudinary.uploader.upload(img, {
-              folder: "unlock_me_gallery",
-              transformation: [{ width: 800, crop: "limit" }]
-            });
-            return uploadRes.secure_url;
-          } catch (err) {
-            console.error("Gallery upload error:", err);
-            throw new Error("Failed to upload gallery image");
-          }
-        }
-        // If it's an existing URL, keep it
-        return img;
-      })
-    );
-
-    // D) Save final array
-    user.gallery = processedImages;
-    await user.save();
-
-    invalidateMatchesCache(userId, "profile_full").catch((err) => console.error("Cache invalidation error:", err));
-    res.status(200).json(user.gallery);
+    res.status(202).json({ 
+        message: "Gallery update started in background.",
+        status: "processing"
+    });
   } catch (error) {
     console.error("Update Gallery Error:", error);
     const errorMessage = process.env.NODE_ENV === 'production' 
@@ -385,6 +314,11 @@ export const updateCategoryAnswers = async (req, res) => {
     user.dna = newDNA;
 
     await user.save();
+    
+    // ✅ Trigger Redis Sync for Interests
+    const { dispatchExploreSync } = await import("../../utils/workerDispatcher.js");
+    dispatchExploreSync(userId, user.toObject()); // We send current user as old data isn't easily available, or just send current
+
     invalidateMatchesCache(userId, "profile_full").catch((err) => console.error("Cache invalidation error:", err));
     res.status(200).json({ 
         questionsResults: user.questionsbycategoriesResults, 
@@ -407,9 +341,13 @@ export const forgotPassword = async (req, res) => {
     
     email = email.toLowerCase().trim();
 
+    // ✅ Security Fix #11: Always return same response to prevent user enumeration
+    const genericMessage = "If this email is registered, you'll receive a password reset email.";
+
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      // Return same response whether user exists or not
+      return res.status(200).json({ message: genericMessage });
     }
 
     const tempPassword = crypto.randomBytes(4).toString("hex");
@@ -425,19 +363,11 @@ export const forgotPassword = async (req, res) => {
       html: getPasswordResetTemplate(user.name , tempPassword),
     });
     
-    if(data){
-      return res.status(200).json({ message : "Please check your email"})
-    }
-
     if (error) {
       console.error("Resend Error:", error);
-      const errorMessage = process.env.NODE_ENV === 'production' 
-        ? "Error sending email. Please try again later." 
-        : error.message;
-      return res.status(500).json({ message: errorMessage });
     }
 
-    res.status(200).json({ message: "New password sent to your email." });
+    res.status(200).json({ message: genericMessage });
 
   } catch (error) {
     console.error("Forgot Password Error:", error);
@@ -470,52 +400,130 @@ export const deleteAccount = async (req, res) => {
 
     // Delete Gallery Images
     if (user.gallery && user.gallery.length > 0) {
-      for (const imgUrl of user.gallery) {
-        await deleteFromCloudinary(imgUrl);
-      }
+      // ✅ Improvement #24: Parallel Cloudinary deletes
+      await Promise.all(user.gallery.map(imgUrl => deleteFromCloudinary(imgUrl)));
     }
 
     // 3. WIPE POSTS & POST IMAGES
     const userPosts = await Post.find({ author: userId });
-    for (const post of userPosts) {
-      if (post.image) {
-        // Posts are stored in 'unlock_me_posts' folder or similar
-        await deleteFromCloudinary(post.image);
-      }
-    }
+    // ✅ Improvement #24: Parallel Cloudinary deletes
+    await Promise.all(
+      userPosts.filter(post => post.image).map(post => deleteFromCloudinary(post.image))
+    );
     await Post.deleteMany({ author: userId });
 
-    // 4. WIPE MESSAGES & CHATS
+    // 4. WIPE MESSAGES & CHATS (Soft Delete - other user keeps chat history)
     try {
-      // Delete messages sent or received by user
-      await Message.deleteMany({ $or: [{ sender: userId }, { receiver: userId }] });
+      // ✅ Bug Fix #2: Delete chat file attachments from Cloudinary
+      const userMessages = await Message.find({
+        sender: userId,
+        fileUrl: { $exists: true, $ne: null, $ne: "" }
+      });
+      for (const msg of userMessages) {
+        if (msg.fileUrl) {
+          await deleteFromCloudinary(msg.fileUrl);
+        }
+      }
 
-      // Delete chats where user is a participant
-      await Conversation.deleteMany({ participants: { $in: [userId] } });
+      // ✅ Bug Fix #3: Soft delete — anonymize user's messages, don't delete conversation
+      // Anonymize messages sent by deleted user (keep them visible for the other user)
+      await Message.updateMany(
+        { sender: userId },
+        { $set: { sender: null, text: "This message is from a deleted account", isDeleted: true } }
+      );
+
+      // Delete messages that were ONLY received by the deleted user (cleanup)
+      // But keep messages sent TO the deleted user (they belong to the sender's side too)
+
+      // Remove deleted user from conversation participants
+      // If both participants are gone, delete the conversation
+      const userConversations = await Conversation.find({ participants: userId });
+      for (const conv of userConversations) {
+        if (conv.participants.length <= 2) {
+          // Remove the deleted user from participants
+          await Conversation.findByIdAndUpdate(conv._id, {
+            $pull: { participants: userId },
+            $addToSet: { hiddenBy: userId }
+          });
+        }
+      }
+
+      // Clean up conversations with no remaining participants
+      await Conversation.deleteMany({ participants: { $size: 0 } });
+
     } catch (e) {
       console.log("Chat/Message cleanup error or models missing:", e);
     }
 
-    // 5. REMOVE USER FROM OTHER USERS' LISTS (Likes/Matches)
-    await User.updateMany(
-      {},
-      {
-        $pull: {
-          likedUsers: userId,
-          likedBy: userId,
-          dislikedUsers: userId,
-          superLikedUsers: userId,
-          superLikedBy: userId,
-          "potentialMatches": { user: userId }
+    // 4b. GO DATE CLEANUP (Scale & Stability Fix)
+    try {
+      // Find dates created by the user to cleanup images
+      const userDates = await GoDate.find({ creator: userId });
+      for (const date of userDates) {
+        if (date.imageId) {
+          await cloudinary.uploader.destroy(date.imageId).catch(() => {});
         }
       }
-    );
+      
+      // Delete all dates created by user
+      await GoDate.deleteMany({ creator: userId });
+      
+      // Delete all applications made by user
+      await GoDateApply.deleteMany({ userId: userId });
+      
+      // Remove user from any applicants list of OTHER dates
+      await GoDate.updateMany(
+        { applicants: userId },
+        { $pull: { applicants: userId } }
+      );
+      
+      console.log(`[GoDateCleanup] Cleaned up records for user: ${userId}`);
+    } catch (e) {
+      console.error("GoDate cleanup error:", e);
+    }
+
+    // 5. TARGETED CLEANUP (Scale Optimization)
+    // Instead of full collection scan with {}, we target specific users
+    const relatedUserIds = [
+      ...(user.likedBy || []),
+      ...(user.superLikedBy || []),
+      ...(user.likedUsers || []),
+      ...(user.superLikedUsers || []),
+      ...(user.dislikedUsers || []),
+      ...(user.matches || []),
+      ...(user.blockedBy || []),
+      ...(user.blockedUsers || []),
+    ].map(id => id.toString());
+
+    // Remove duplicates
+    const uniqueTargetIds = [...new Set(relatedUserIds)];
+
+    if (uniqueTargetIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: uniqueTargetIds } },
+        {
+          $pull: {
+            likedUsers: userId,
+            likedBy: userId,
+            dislikedUsers: userId,
+            superLikedUsers: userId,
+            superLikedBy: userId,
+            matches: userId,
+            blockedUsers: userId,
+            blockedBy: userId,
+            potentialMatches: { user: userId }
+          }
+        }
+      );
+    }
 
     // 6. DELETE THE USER RECORD
     await User.findByIdAndDelete(userId);
 
-    // 7. CLEAR SESSION/COOKIE
+    // 7. CLEAR SESSION/COOKIES
     res.clearCookie("unlock-me-token"); 
+    // ✅ Bug Fix: Also clear the refresh token cookie
+    res.clearCookie("unlock-me-refresh-token");
 
     res.status(200).json({ message: "Account and all associated data permanently deleted." });
   } catch (error) {
@@ -532,7 +540,7 @@ export const getMatchesDashboard = async (req, res) => {
   try {
     const currentUserId = req.user.userId;
     const me = await User.findById(currentUserId)
-        .select("likedUsers superLikedUsers likedBy superLikedBy subscription matches");
+        .select("likedUsers superLikedUsers likedBy superLikedBy subscription matches blockedUsers blockedBy");
 
     if (!me) return res.status(404).json({ message: "User not found" });
 
@@ -552,16 +560,22 @@ export const getMatchesDashboard = async (req, res) => {
     // اگر فیلد matches نداری، باید محاسبه کنی:
     // const mutualIds = me.likedUsers.filter(id => me.likedBy.includes(id));
     
-    const mutualMatches = await User.find({ _id: { $in: mutualIds } })
+    // ✅ Bug Fix: Build blocked set for filtering
+    const blockedSet = new Set([
+      ...(me.blockedUsers || []).map(id => id.toString()),
+      ...(me.blockedBy || []).map(id => id.toString()),
+    ]);
+
+    const mutualMatches = (await User.find({ _id: { $in: mutualIds } })
         .select(populateFields)
-        .lean();
+        .lean()).filter(u => !blockedSet.has(u._id.toString()));
 
     // --- B. SENT LIKES ---
     // (کسانی که من لایک کردم)
     const sentIds = [...(me.likedUsers || []), ...(me.superLikedUsers || [])];
-    const sentLikes = await User.find({ _id: { $in: sentIds } })
+    const sentLikes = (await User.find({ _id: { $in: sentIds } })
         .select(populateFields)
-        .lean();
+        .lean()).filter(u => !blockedSet.has(u._id.toString()));
 
     // --- C. INCOMING LIKES (The Important Part!) ---
     // (کسانی که من را لایک کردند اما من هنوز لایک نکردم)
@@ -569,9 +583,9 @@ export const getMatchesDashboard = async (req, res) => {
         id => !mutualIds.includes(id.toString()) // حذف کسانی که مچ شده‌اند
     );
 
-    const rawIncoming = await User.find({ _id: { $in: incomingIds } })
+    const rawIncoming = (await User.find({ _id: { $in: incomingIds } })
         .select(populateFields)
-        .lean();
+        .lean()).filter(u => !blockedSet.has(u._id.toString()));
 
     // ✅ اعمال محدودیت روی Incoming Likes
     // اگر لیمیت بی‌نهایت بود (گلد/پلاتینیوم) -> همه را نشان بده

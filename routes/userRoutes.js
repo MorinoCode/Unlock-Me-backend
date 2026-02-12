@@ -1,6 +1,6 @@
 // userRoutes.js
 import express from "express";
-import { protect } from "../middleware/auth.js";
+import { protect, optionalProtect } from "../middleware/auth.js";
 import { getUserDetails, getUserLocation } from "../controllers/explore/explore.js";
 import { handleDislike, handleLike } from "../controllers/userActions/userActions.js";
 import { 
@@ -14,11 +14,14 @@ import {
   updateProfileInfo,
   getMatchesDashboard
 } from "../controllers/userController/userController.js";
+import { blockUser, unblockUser, getBlockedUsers } from "../controllers/blockController/blockController.js";
 import { authLimiter } from "../middleware/authLimiter.js";
 import { signinUser } from "../controllers/signin/signinUser.js";
 import { signupUser } from "../controllers/signup/signupUser.js";
 import { signoutUser } from "../controllers/signout/signoutUser.js";
 import { refreshToken } from "../controllers/auth/refreshToken.js";
+import { checkUserReady } from "../controllers/user/userStatus.js";
+import { triggerAnalysisWorkers } from "../controllers/user/triggerAnalysis.js";
 // ✅ Security Fix: Import validation middleware
 import { validateSignup, validateSignin, validateUpdateProfile, validateUpdatePassword } from "../middleware/validation.js";
 
@@ -30,8 +33,10 @@ router.post("/signout", authLimiter, signoutUser);
 router.post("/refresh-token", refreshToken); // ✅ Security Fix: Token refresh endpoint
 router.post("/forgot-password", authLimiter, forgotPassword);
 
+router.get("/ready", protect, checkUserReady); // ✅ Check if user is ready
+router.post("/trigger-analysis", protect, triggerAnalysisWorkers); // ✅ Trigger workers from Analysis Page
 router.get("/location", protect, getUserLocation);
-router.get("/getUserInformation", protect, getUserInformation);
+router.get("/getUserInformation", optionalProtect, getUserInformation);
 router.get("/details/:userId", protect, getUserDetails); 
 
 
@@ -47,6 +52,11 @@ router.put("/profile/gallery", protect, updateGallery);
 router.put("/profile/categories", protect, updateCategoryAnswers);
 router.delete("/profile/delete-account", protect, deleteAccount); 
 router.get("/matches/matches-dashbord", protect, getMatchesDashboard); 
+
+// ✅ Block User Feature
+router.post("/block/:targetUserId", protect, blockUser);
+router.post("/unblock/:targetUserId", protect, unblockUser);
+router.get("/blocked", protect, getBlockedUsers);
 
 
 export default router;

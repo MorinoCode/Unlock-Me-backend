@@ -118,6 +118,24 @@ export const invalidateMatchesCache = async (userId, type) => {
 };
 
 /**
+ * Invalidate all feed caches for a user (Global Feed & My Posts).
+ * Uses SCAN/KEYS pattern matching to find `matches:${userId}:posts_*`.
+ */
+export const invalidateFeedCache = async (userId) => {
+  if (!redisClient || !redisClient.isOpen) return;
+
+  try {
+    const pattern = `${CACHE_PREFIXES.MATCHES}:${userId}:posts_*`;
+    const keys = await redisClient.keys(pattern);
+    if (keys.length > 0) {
+      await redisClient.del(keys);
+    }
+  } catch (error) {
+    console.error("Invalidate feed cache error:", error);
+  }
+};
+
+/**
  * Invalidate all explore caches for a user (all categories and pages).
  * Call when user updates location, interests, or preferences.
  */

@@ -11,12 +11,11 @@ const requiredEnvVars = [
 
 const optionalEnvVars = [
   'REDIS_URL',
-  'CLOUDINARY_CLOUD_NAME',
-  'CLOUDINARY_API_KEY',
-  'CLOUDINARY_API_SECRET',
+  'CLOUDINARY_NAME',
+  'CLOUDINARY_KEY',
+  'CLOUDINARY_SECRET',
   'RESEND_API_KEY',
   'STRIPE_SECRET_KEY',
-  'NODE_ENV'
 ];
 
 export const validateEnv = () => {

@@ -9,6 +9,7 @@ import {
   getGoDateConfig,
   getGoDateApplyConfig,
 } from "../../utils/subscriptionRules.js";
+import { godateQueue } from "../../config/queue.js";
 import mongoose from "mongoose"; // ✅ Critical Fix: For transactions
 import {
   getMatchesCache,
@@ -149,39 +150,24 @@ export const getAvailableDates = async (req, res) => {
     const userId = req.user._id;
     const city = (req.query.city || "").trim().toLowerCase();
     const category = (req.query.category || "all").trim().toLowerCase();
-    const cacheKey = `go_dates_browse_${city}_${category}`;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const cacheKey = `go_dates_browse_${city}_${category}_p${page}_l${limit}`;
 
     const cached = await getMatchesCache(userId, cacheKey);
     if (cached) return res.json(cached);
 
-    const userIdObj = mongoose.Types.ObjectId.isValid(userId)
-      ? new mongoose.Types.ObjectId(userId)
-      : userId;
-    const now = Date.now();
-
-    const expiredDates = await GoDate.find({
-      status: "open",
-      dateTime: { $lt: new Date(now - EXPIRED_THRESHOLD_MS) },
-    });
-    for (const date of expiredDates) {
-      try {
-        if (date.imageId) await cloudinary.uploader.destroy(date.imageId);
-      } catch {
-        // ignore cloudinary destroy errors
-      }
-      await GoDate.findByIdAndDelete(date._id);
-    }
-
     const query = {
       status: "open",
-      dateTime: { $gt: new Date(now - EXPIRED_THRESHOLD_MS) },
-      creator: { $ne: userIdObj },
+      dateTime: { $gt: new Date(Date.now() - EXPIRED_THRESHOLD_MS) },
+      creator: { $ne: userId },
     };
 
     if (city) {
-      query["location.city"] = {
-        $regex: new RegExp(`^${city}$`, "i"),
-      };
+      // ✅ Optimization: Exact indexed match for city (Dropdown ensures consistency)
+      query["location.city"] = city;
     }
     if (category && category !== "all") {
       query.category = category;
@@ -189,20 +175,24 @@ export const getAvailableDates = async (req, res) => {
 
     const dates = await GoDate.find(query)
       .populate("creator", "name avatar age gender isVerified")
-      .sort({ dateTime: 1 })
-      .limit(50)
+      .sort({ createdAt: -1 }) // Sort by Tarikhe Sakht as requested
+      .skip(skip)
+      .limit(limit)
       .lean();
 
     const sanitizedDates = dates.map((date) => {
       const d = { ...date };
+      // ✅ Privacy Guard: Hide exact address in browse list
       if (d.location) delete d.location.exactAddress;
+      
       d.hasApplied = (d.applicants || []).some(
         (id) => id && id.toString() === userId.toString()
       );
       return d;
     });
 
-    await setMatchesCache(userId, cacheKey, sanitizedDates, GO_DATE_CACHE_TTL);
+    // ✅ Cache for 10 minutes as requested
+    await setMatchesCache(userId, cacheKey, sanitizedDates, 600);
     res.json(sanitizedDates);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -212,36 +202,39 @@ export const getAvailableDates = async (req, res) => {
 export const getMyDates = async (req, res) => {
   try {
     const userId = req.user._id;
-    const cached = await getMatchesCache(userId, "go_dates_mine");
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const cacheKey = `go_dates_mine_p${page}_l${limit}`;
+    const cached = await getMatchesCache(userId, cacheKey);
     if (cached) return res.json(cached);
 
-    const now = Date.now();
+    // Show OWN dates or dates where user is ACCEPTED
+    const query = {
+      $or: [
+        { creator: userId },
+        { acceptedUser: userId }
+      ]
+    };
 
-    const expiredDates = await GoDate.find({
-      creator: userId,
-      status: "open",
-      dateTime: { $lt: new Date(now - EXPIRED_THRESHOLD_MS) },
-    });
-    for (const date of expiredDates) {
-      if (date.imageId) await cloudinary.uploader.destroy(date.imageId);
-      await GoDate.findByIdAndDelete(date._id);
-    }
-
-    const dates = await GoDate.find({ creator: userId })
-      .populate("applicants", "name avatar age gender bio")
+    const dates = await GoDate.find(query)
+      .populate({
+        path: "applicants",
+        select: "name avatar age gender bio",
+        options: { limit: 20 }, // ✅ Scale Fix: Paginate/Limit applicants population
+      })
       .populate("acceptedUser", "name avatar")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
 
-    const list = Array.isArray(dates) ? dates : [];
-    await setMatchesCache(userId, "go_dates_mine", list, GO_DATE_CACHE_TTL);
-    res.json(list);
+    await setMatchesCache(userId, cacheKey, dates, 600);
+    res.json(dates);
   } catch (err) {
     console.error("Get My Dates Error:", err);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : err.message;
-    res.status(500).json({ error: errorMessage });
+    res.status(500).json({ error: "Server error. Please try again later." });
   }
 };
 
@@ -307,15 +300,22 @@ export const applyForDate = async (req, res) => {
     await session.commitTransaction();
 
     await invalidateGoDateCacheForUser(userId);
+    await invalidateGoDateCacheForUser(date.creator); // ✅ Critical Fix: Invalidate Creator Cache
     await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
 
-    await emitNotification(io, date.creator, {
-      type: "DATE_APPLICANT",
-      senderId: userId,
-      senderName: currentUser.name,
-      senderAvatar: currentUser.avatar || "",
-      message: `${currentUser.name} requested to join '${date.title}'!`,
-      targetId: date._id,
+    await godateQueue.add("notif", {
+      type: "NOTIFICATION",
+      data: {
+        receiverId: date.creator,
+        notificationData: {
+          type: "DATE_APPLICANT",
+          senderId: userId,
+          senderName: currentUser.name,
+          senderAvatar: currentUser.avatar || "",
+          message: `${currentUser.name} requested to join '${date.title}'!`,
+          targetId: date._id,
+        }
+      }
     });
 
     res.json({ success: true });
@@ -346,6 +346,7 @@ export const withdrawApplication = async (req, res) => {
     await date.save();
     await GoDateApply.deleteOne({ userId, dateId });
     await invalidateGoDateCacheForUser(userId);
+    await invalidateGoDateCacheForUser(date.creator); // ✅ Critical Fix: Invalidate Creator Cache
     await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
 
     res.json({ success: true, message: "Application withdrawn" });
@@ -489,32 +490,29 @@ export const acceptDateApplicant = async (req, res) => {
 
     io.to(applicantId.toString()).emit("receive_message", autoMessage);
 
-    await emitNotification(io, applicantId, {
-      type: "DATE_ACCEPTED",
-      senderId: userId,
-      senderName: creator.name,
-      senderAvatar: creator.avatar || "",
-      message: `Your date request was accepted! Address & details are in the chat.`,
-      targetId: chat._id,
+    await godateQueue.add("notif", {
+      type: "NOTIFICATION",
+      data: {
+        receiverId: applicantId,
+        notificationData: {
+          type: "DATE_ACCEPTED",
+          senderId: userId,
+          senderName: creator.name,
+          senderAvatar: creator.avatar || "",
+          message: `Your date request was accepted! Address & details are in the chat.`,
+          targetId: chat._id,
+        }
+      }
     });
-
-    // ✅ اطلاع به سایر متقاضیان: دیت بسته شد / شخص دیگری انتخاب شد
-    const otherApplicantIds = date.applicants.filter(
-      (id) => id.toString() !== applicantId.toString()
-    );
-    for (const otherId of otherApplicantIds) {
-      await emitNotification(io, otherId, {
-        type: "DATE_CLOSED_OTHER",
-        senderId: userId,
-        senderName: creator.name,
-        senderAvatar: creator.avatar || "",
-        message: `The date "${date.title}" is closed. Someone else was selected.`,
-        targetId: dateId,
-      });
-    }
 
     await invalidateGoDateCacheForUsers([userId, applicantId]);
     await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
+    
+    // ✅ Critical Fix: Invalidate Conversation Cache (Correct Keys)
+    await invalidateMatchesCache(userId, "conversations_active");
+    await invalidateMatchesCache(applicantId, "conversations_active");
+    await invalidateMatchesCache(userId, "unread_count");
+    await invalidateMatchesCache(applicantId, "unread_count");
 
     res.json({ success: true, chatRuleId: chat._id });
   } catch (err) {
@@ -575,13 +573,19 @@ export const cancelGoDate = async (req, res) => {
 
     const creator = await User.findById(userId).select("name avatar");
     if (date.acceptedUser) {
-      await emitNotification(io, date.acceptedUser, {
-        type: "DATE_CANCELLED",
-        senderId: userId,
-        senderName: creator.name,
-        senderAvatar: creator.avatar || "",
-        message: `The date "${date.title}" has been cancelled by the host.`,
-        targetId: dateId,
+      await godateQueue.add("notif", {
+        type: "NOTIFICATION",
+        data: {
+          receiverId: date.acceptedUser,
+          notificationData: {
+            type: "DATE_CANCELLED",
+            senderId: userId,
+            senderName: creator.name,
+            senderAvatar: creator.avatar || "",
+            message: `The date "${date.title}" has been cancelled by the host.`,
+            targetId: dateId,
+          }
+        }
       });
       await invalidateGoDateCacheForUsers([userId, date.acceptedUser]);
     } else {
@@ -603,28 +607,47 @@ export const cancelGoDate = async (req, res) => {
 export const getGoDateDetails = async (req, res) => {
   try {
     const { dateId } = req.params;
+    const userId = req.user._id;
 
     const cacheKey = `go_date_details_${dateId}`;
     const cached = await getMatchesCache("global", cacheKey);
-    if (cached) return res.json(cached);
+    
+    let dateData;
+    if (cached) {
+      dateData = cached;
+    } else {
+      dateData = await GoDate.findById(dateId)
+        .populate("creator", "name avatar age gender bio")
+        .populate({
+          path: "applicants",
+          select: "name avatar age gender bio",
+          options: { limit: 50 }, // ✅ Scale Fix: Limit applicants in details view
+        })
+        .populate("acceptedUser", "name avatar age gender bio")
+        .lean();
+      
+      if (!dateData) return res.status(404).json({ error: "Date not found" });
+      await setMatchesCache("global", cacheKey, dateData, GO_DATE_CACHE_TTL);
+    }
 
-    const date = await GoDate.findById(dateId)
-      .populate("creator", "name avatar age gender bio")
-      .populate("applicants", "name avatar age gender bio")
-      .populate("acceptedUser", "name avatar age gender bio")
-      .lean();
+    // ✅ Privacy Guard: Clone data and redact address if unauthorized
+    const result = { ...dateData };
+    const isCreator = result.creator?._id?.toString() === userId.toString() || result.creator?.toString() === userId.toString();
+    const isAccepted = result.acceptedUser?._id?.toString() === userId.toString() || result.acceptedUser?.toString() === userId.toString();
 
-    if (!date) return res.status(404).json({ error: "Date not found" });
+    if (!isCreator && !isAccepted) {
+      if (result.location) {
+        result.location = {
+          ...result.location,
+          exactAddress: "HIDDEN (Locked until match)" 
+        };
+      }
+    }
 
-    await setMatchesCache("global", cacheKey, date, GO_DATE_CACHE_TTL);
-    res.json(date);
+    res.json(result);
   } catch (err) {
     console.error("Get GoDate Details Error:", err);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : err.message;
-    res.status(500).json({ error: errorMessage });
+    res.status(500).json({ error: "Server error." });
   }
 };
 
@@ -642,11 +665,10 @@ export const deleteGoDate = async (req, res) => {
     }
 
     if (date.status === "closed" && date.acceptedUser) {
-      return res.status(400).json({ error: "Cannot delete a confirmed date." });
+      return res.status(400).json({ error: "Cannot delete a confirmed date. Cancel it first." });
     }
-    if (date.status === "cancelled") {
-      return res.status(400).json({ error: "Date is already cancelled." });
-    }
+    // Allowed to delete cancelled dates now
+
 
     if (date.imageId) {
       await cloudinary.uploader.destroy(date.imageId);

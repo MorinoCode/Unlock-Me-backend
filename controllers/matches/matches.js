@@ -1,6 +1,6 @@
 import User from "../../models/User.js";
 import { calculateCompatibility, generateMatchInsights } from "../../utils/matchUtils.js";
-import { getVisibilityThreshold } from "../../utils/subscriptionRules.js";
+import { getVisibilityThreshold, getMatchListLimit } from "../../utils/subscriptionRules.js";
 // ✅ Performance Fix: Import cache helpers
 import { getMatchesCache, setMatchesCache } from "../../utils/cacheHelper.js";
 
@@ -18,7 +18,7 @@ export const getMatchesDashboard = async (req, res) => {
     }
     
     const user = await User.findById(currentUserId)
-      .select("likedUsers likedBy matches superLikedBy dislikedUsers interests lookingFor gender location birthday questionsbycategoriesResults subscription")
+      .select("likedUsers likedBy matches superLikedBy dislikedUsers blockedUsers blockedBy interests lookingFor gender location birthday questionsbycategoriesResults subscription dna")
       .lean();
       
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -28,7 +28,17 @@ export const getMatchesDashboard = async (req, res) => {
     const myLikedByIds = (user.likedBy || []).map(id => id.toString());
     const myMatchesIds = (user.matches || []).map(id => id.toString());
     const mySuperLikedByIds = (user.superLikedBy || []).map(id => id.toString());
-    const myDislikedIds = (user.dislikedUsers || []).map(id => id.toString());
+    
+    // ✅ Performance Optimization: Use Sets for O(1) lookups instead of O(N)
+    const myLikedIdsSet = new Set(myLikedIds);
+    const myLikedByIdsSet = new Set(myLikedByIds);
+    const myMatchesIdsSet = new Set(myMatchesIds);
+    const myDislikedIdsSet = new Set((user.dislikedUsers || []).map(id => id.toString()));
+    const myBlockedIdsSet = new Set([
+      ...(user.blockedUsers || []).map(id => id.toString()),
+      ...(user.blockedBy || []).map(id => id.toString()),
+    ]);
+
     
     // Get visibility threshold for current user's plan
     const userPlan = user.subscription?.plan || "free";
@@ -44,58 +54,91 @@ export const getMatchesDashboard = async (req, res) => {
       const pageNum = parseInt(page);
       const limitNum = parseInt(limit);
       let targetIds = [];
+      let isIncomingType = false;
 
       if (type === 'mutual') {
-        // ✅ Performance Fix: Use matches array if available (much faster)
-        // Mutual matches: users who liked each other (excluding disliked)
         targetIds = myMatchesIds.length > 0 
-          ? myMatchesIds.filter(id => !myDislikedIds.includes(id))
-          : myLikedIds.filter(id => myLikedByIds.includes(id) && !myDislikedIds.includes(id));
+          ? myMatchesIds.filter(id => !myDislikedIdsSet.has(id) && !myBlockedIdsSet.has(id))
+          : myLikedIds.filter(id => myLikedByIdsSet.has(id) && !myDislikedIdsSet.has(id) && !myBlockedIdsSet.has(id));
       } 
       else if (type === 'incoming') {
-        // Incoming likes: users who liked me but I haven't liked back (excluding disliked and matches)
-        targetIds = myLikedByIds.filter(id => 
-          !myLikedIds.includes(id) && 
-          !myMatchesIds.includes(id) && 
-          !myDislikedIds.includes(id)
+        isIncomingType = true;
+        // Merge superlikes into incoming for view-all too
+        const incomingNotMatched = myLikedByIds.filter(id => !myLikedIdsSet.has(id) && !myMatchesIdsSet.has(id));
+        const superNotMatched = mySuperLikedByIds.filter(id => !myMatchesIdsSet.has(id));
+        
+        // Remove duplicates and filter blocked
+        targetIds = [...new Set([...incomingNotMatched, ...superNotMatched])].filter(id => 
+          !myDislikedIdsSet.has(id) && !myBlockedIdsSet.has(id)
         );
       } 
-      else if (type === 'sent') {
-        // Sent likes: users I liked but they haven't liked back (excluding disliked and matches)
-        targetIds = myLikedIds.filter(id => 
-          !myLikedByIds.includes(id) && 
-          !myMatchesIds.includes(id) && 
-          !myDislikedIds.includes(id)
-        );
-      }
-      else if (type === 'superlikes') {
-        // Super Likes received (excluding matches and disliked)
-        targetIds = mySuperLikedByIds.filter(id => 
-          !myMatchesIds.includes(id) && 
-          !myDislikedIds.includes(id)
-        );
-      }
+      // Sent likes removed from dashboard/view-all logic as per user request
 
       targetIds.reverse();
+
+      // --- Quantity-based Stickiness Logic ---
+      const revealLimit = getMatchListLimit(userPlan, type);
+      let revealedIds = [];
+
+      if (revealLimit === Infinity) {
+        revealedIds = targetIds;
+      } else {
+        // Check for stickiness cache (24h)
+        const revealCacheKey = `reveal_set_${type}_${currentUserId}`;
+        const cachedReveals = await getMatchesCache(currentUserId, revealCacheKey);
+
+        if (cachedReveals && Array.isArray(cachedReveals)) {
+          // Use cached IDs, but filter they still exist in targetIds (not unliked/blocked since)
+          const targetIdsSet = new Set(targetIds);
+          revealedIds = cachedReveals.filter(id => targetIdsSet.has(id));
+          
+          // If the cached set is smaller than the limit (new likes came in), we keep the old ones 
+          // to maintain stickiness, but we don't automatically add new ones until 24h is up
+          // unless they are empty.
+        } else {
+          // Pick fresh N IDs
+          revealedIds = targetIds.slice(0, revealLimit);
+          await setMatchesCache(currentUserId, revealCacheKey, revealedIds, 86400); // 24 Hours
+        }
+      }
 
       const totalUsers = targetIds.length;
       const totalPages = Math.ceil(totalUsers / limitNum);
       const startIndex = (pageNum - 1) * limitNum;
       const paginatedIds = targetIds.slice(startIndex, startIndex + limitNum);
 
-      // ✅ Performance Fix: Batch query with all needed fields
       const usersData = await User.find({ _id: { $in: paginatedIds } })
         .select("name avatar bio location birthday interests gender isVerified subscription dna")
         .lean();
 
-      // ✅ Performance Fix: Batch compatibility calculation (more efficient)
-      let processedUsers = usersData.map(matchUser => {
+      const revealedIdsSet = new Set(revealedIds);
+
+      let processedUsers = usersData.map((matchUser) => {
+        const userIdStr = matchUser._id.toString();
         const matchScore = calculateCompatibility(user, matchUser);
-        const isLocked = matchScore > visibilityThreshold;
+        const isSuper = mySuperLikedByIdsSet.has(userIdStr);
+        
+        const isRevealed = revealedIdsSet.has(userIdStr) || revealLimit === Infinity;
+        const isLocked = !isRevealed;
+
+        let finalData = { ...matchUser };
+
+        if (isLocked) {
+          finalData.name = "Someone";
+          finalData.avatar = "/locked-avatar.png";
+          finalData.bio = "";
+          // Remove sensitive fields
+          delete finalData.location;
+          delete finalData.interests;
+          delete finalData.dna;
+          delete finalData.gallery;
+        }
+
         return {
-          ...matchUser,
+          ...finalData,
           matchScore,
-          isLocked // Apply visibility threshold
+          engagementType: isSuper ? "super" : "like",
+          isLocked
         };
       });
 
@@ -105,75 +148,77 @@ export const getMatchesDashboard = async (req, res) => {
 
       const result = {
         users: processedUsers,
-        pagination: { currentPage: pageNum, totalPages, totalUsers }
+        pagination: { currentPage: pageNum, totalPages, totalUsers },
+        revealCount: revealedIds.length,
+        totalIncomingCount: totalUsers
       };
       
-      // ✅ Performance Fix: Cache the result
-      await setMatchesCache(currentUserId, type, result, 600); // 10 minutes
-      
+      await setMatchesCache(currentUserId, type, result, 600);
       return res.status(200).json(result);
     }
 
     else {
-      // ✅ Performance Fix: Use matches array for mutual matches
-      // Mutual matches: users who liked each other (excluding disliked)
+      // 1. Mutual Matches Preview
       let mutualIds = myMatchesIds.length > 0 
-        ? myMatchesIds.filter(id => !myDislikedIds.includes(id)).reverse()
-        : myLikedIds.filter(id => myLikedByIds.includes(id) && !myDislikedIds.includes(id)).reverse();
+        ? myMatchesIds.filter(id => !myDislikedIdsSet.has(id)).reverse()
+        : myLikedIds.filter(id => myLikedByIdsSet.has(id) && !myDislikedIdsSet.has(id)).reverse();
       
-      // Sent likes: users I liked but they haven't liked back (excluding disliked and matches)
-      let sentIds = myLikedIds.filter(id => 
-        !myLikedByIds.includes(id) && 
-        !myMatchesIds.includes(id) && 
-        !myDislikedIds.includes(id)
-      ).reverse();
+      // 2. Combined Incoming & SuperLikes Preview
+      const incomingNotMatched = myLikedByIds.filter(id => !myLikedIdsSet.has(id) && !myMatchesIdsSet.has(id));
+      const superNotMatched = mySuperLikedByIds.filter(id => !myMatchesIdsSet.has(id));
+      let combinedIncomingIds = [...new Set([...incomingNotMatched, ...superNotMatched])].reverse();
       
-      // Incoming likes: users who liked me but I haven't liked back (excluding disliked and matches)
-      let incomingIds = myLikedByIds.filter(id => 
-        !myLikedIds.includes(id) && 
-        !myMatchesIds.includes(id) && 
-        !myDislikedIds.includes(id)
-      ).reverse();
-      
-      // Super Likes received (excluding matches and disliked)
-      let superLikeIds = mySuperLikedByIds.filter(id => 
-        !myMatchesIds.includes(id) && 
-        !myDislikedIds.includes(id)
-      ).reverse();
-
       const previewLimit = 20;
       const mutualPreviewIds = mutualIds.slice(0, previewLimit);
-      const sentPreviewIds = sentIds.slice(0, previewLimit);
-      const incomingPreviewIds = incomingIds.slice(0, previewLimit);
-      const superLikePreviewIds = superLikeIds.slice(0, previewLimit);
+      const incomingPreviewIds = combinedIncomingIds.slice(0, previewLimit);
 
-      const allPreviewIds = [...new Set([...mutualPreviewIds, ...sentPreviewIds, ...incomingPreviewIds, ...superLikePreviewIds])];
+      const allPreviewIds = [...new Set([...mutualPreviewIds, ...incomingPreviewIds])];
 
       const usersData = await User.find({ _id: { $in: allPreviewIds } })
         .select("name avatar bio location birthday matchScore interests gender isVerified subscription dna")
         .lean();
 
-      const enrichUsers = (idList) => {
-        return idList.map(id => {
+      const enrichUsers = (idList, typeName = "mutual") => {
+        const revealLimit = getMatchListLimit(userPlan, typeName);
+        // For preview dashboard, we don't necessarily need the stickiness cache for the first view-all request, 
+        // but it's better to be consistent. 
+        // For simplicity in the preview, we'll just slice.
+        
+        return idList.map((id, index) => {
           const matchUser = usersData.find(u => u._id.toString() === id);
           if (!matchUser) return null;
+          
           const matchScore = calculateCompatibility(user, matchUser);
-          const isLocked = matchScore > visibilityThreshold;
+          const isSuper = mySuperLikedByIdsSet.has(id);
+          
+          const isRevealed = (typeName === "mutual") || (index < revealLimit);
+          const isLocked = !isRevealed;
+
+          let finalData = { ...matchUser };
+
+          if (isLocked) {
+              finalData.name = "Someone";
+              finalData.avatar = "/locked-avatar.png";
+              finalData.bio = "";
+              delete finalData.location;
+              delete finalData.interests;
+              delete finalData.dna;
+          }
+
           return {
-            ...matchUser,
+            ...finalData,
             matchScore,
-            isLocked // Apply visibility threshold
+            engagementType: isSuper ? "super" : "like",
+            isLocked
           };
         }).filter(u => u !== null);
       };
 
       const dashboardData = {
-        mutualMatches: enrichUsers(mutualPreviewIds),
-        sentLikes: enrichUsers(sentPreviewIds),
-        incomingLikes: enrichUsers(incomingPreviewIds),
-        superLikes: enrichUsers(superLikePreviewIds)
+        mutualMatches: enrichUsers(mutualPreviewIds, "mutual"),
+        incomingLikes: enrichUsers(incomingPreviewIds, "incoming"),
       };
-      await setMatchesCache(currentUserId, "matches_dashboard", dashboardData, 300); // 5 min
+      await setMatchesCache(currentUserId, "matches_dashboard", dashboardData, 300);
       return res.status(200).json(dashboardData);
     }
 
@@ -196,8 +241,8 @@ export const getMatchInsights = async (req, res) => {
     const cached = await getMatchesCache(myId, cacheKey);
     if (cached) return res.status(200).json(cached);
 
-    const me = await User.findById(myId).select("interests questionsbycategoriesResults location");
-    const other = await User.findById(targetUserId).select("name avatar interests questionsbycategoriesResults location");
+    const me = await User.findById(myId).select("interests questionsbycategoriesResults location dna");
+    const other = await User.findById(targetUserId).select("name avatar interests questionsbycategoriesResults location dna");
 
     if (!me || !other) {
       return res.status(404).json({ message: "User not found" });
@@ -212,6 +257,7 @@ export const getMatchInsights = async (req, res) => {
         avatar: other.avatar
       },
       matchScore: score,
+      dna: insights.dnaComparison.other, // Add flat DNA for frontend SwipeCard
       ...insights
     };
     await setMatchesCache(myId, cacheKey, payload, INSIGHTS_CACHE_TTL);

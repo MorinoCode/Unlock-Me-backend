@@ -1,4 +1,5 @@
 import User from "../../models/User.js";
+import mongoose from "mongoose";
 
 
 
@@ -9,6 +10,11 @@ export const handleLike = async (req, res) => {
 
     if (myId === targetUserId) {
       return res.status(400).json({ message: "You cannot like yourself" });
+    }
+
+    // ✅ Bug Fix #15: Validate targetUserId
+    if (!targetUserId || !mongoose.Types.ObjectId.isValid(targetUserId)) {
+      return res.status(400).json({ message: "Invalid target user ID" });
     }
 
     await Promise.all([
@@ -45,6 +51,11 @@ export const handleDislike = async (req, res) => {
 
     if (myId === targetUserId) {
       return res.status(400).json({ message: "You cannot dislike yourself" });
+    }
+
+    // ✅ Bug Fix #15: Validate targetUserId
+    if (!targetUserId || !mongoose.Types.ObjectId.isValid(targetUserId)) {
+      return res.status(400).json({ message: "Invalid target user ID" });
     }
 
     await User.findByIdAndUpdate(myId, {

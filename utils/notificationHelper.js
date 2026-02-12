@@ -1,37 +1,32 @@
-import Notification from "../models/notification.js";
+import { notificationQueue } from "../config/queue.js";
 
 /**
- * Optimized emitNotification:
- * 1. Saves to Database (for offline support)
- * 2. Emits via Socket (for real-time updates)
+ * Enterprise emitNotification:
+ * Offloads saving and emitting to BullMQ (notificationWorker)
+ * to prevent main-thread bottlenecks.
  */
 export const emitNotification = async (io, receiverId, notificationData) => {
   try {
-    // ۱. ذخیره در دیتابیس (بسیار مهم برای دریافت نوتیفیکیشن‌های قدیمی هنگام ورود)
-    const newNotification = new Notification({
-      receiverId: receiverId,
-      senderId: notificationData.senderId,
-      senderName: notificationData.senderName,
-      senderAvatar: notificationData.senderAvatar,
-      type: notificationData.type,
-      message: notificationData.message,
-      targetId: notificationData.targetId,
+    if (!receiverId) return;
+
+    // Add to BullMQ Queue
+    await notificationQueue.add("process-notification", {
+      receiverId: receiverId.toString(),
+      notificationData: {
+        senderId: notificationData.senderId,
+        senderName: notificationData.senderName,
+        senderAvatar: notificationData.senderAvatar,
+        type: notificationData.type,
+        message: notificationData.message,
+        targetId: notificationData.targetId,
+      }
+    }, {
+      removeOnComplete: true,
+      attempts: 3
     });
 
-    const savedNotification = await newNotification.save();
-
-    const { invalidateMatchesCache } = await import("../utils/cacheHelper.js");
-    await invalidateMatchesCache(receiverId.toString(), "notifications").catch(() => {});
-
-    // ۲. ارسال از طریق سوکت
-    // ما از room استفاده می‌کنیم چون در سمت فرانت، کاربر هنگام اتصال به اتاقی با نام userId خودش join می‌شود
-    if (io) {
-      io.to(receiverId.toString()).emit("new_notification", savedNotification);
-      console.log(`Notification emitted to room: ${receiverId}`);
-    }
-
-    return savedNotification;
+    console.log(`[Queue] Notification enqueued for user: ${receiverId}`);
   } catch (error) {
-    console.error("Error in emitNotification Helper:", error);
+    console.error("Error enqueuing notification:", error);
   }
 };

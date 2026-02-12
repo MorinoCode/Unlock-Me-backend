@@ -131,6 +131,9 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           planType = 'platinum';
         } else if (planLower.includes('gold')) {
           planType = 'gold';
+        } else {
+          // ✅ Bug Fix: Any paid plan that doesn't match specific tiers gets premium
+          planType = 'premium';
         }
 
         // محاسبه تاریخ انقضا (30 روز بعد)
@@ -143,6 +146,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             "subscription.plan": planType,
             "subscription.status": 'active',
             "subscription.expiresAt": expiresAt,
+            "subscription.stripeSubscriptionId": subscriptionId || null,
+            "subscription.stripeCustomerId": session.customer || null,
+            "subscription.isTrial": false,         // ✅ Payment success: trial ends
+            "subscription.trialExpiresAt": null,   // ✅ Payment success: trial ends
+            "subscription.startedAt": new Date()   // ✅ Record start date
           }
         }, { new: true });
 

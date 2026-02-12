@@ -1,7 +1,8 @@
 import Comment from "../../models/Comment.js";
 import Post from "../../models/Post.js";
 import User from "../../models/User.js";
-import { emitNotification } from "../../utils/notificationHelper.js";
+import Like from "../../models/Like.js";
+import { godateQueue } from "../../config/queue.js";
 import { getMatchesCache, setMatchesCache, invalidateMatchesCache } from "../../utils/cacheHelper.js";
 
 const COMMENTS_CACHE_TTL = 300; // 5 min
@@ -10,7 +11,6 @@ export const addComment = async (req, res) => {
   try {
     const { postId } = req.params;
     const { content, parentCommentId } = req.body;
-    const io = req.app.get("io");
 
     const user = await User.findById(req.user.userId).select("-password");
     if (!user)
@@ -45,13 +45,20 @@ export const addComment = async (req, res) => {
       });
 
     if (post.author.toString() !== user._id.toString()) {
-      await emitNotification(io, post.author, {
-        type: "NEW_COMMENT",
-        senderId: user._id,
-        senderName: user.name,
-        senderAvatar: user.avatar,
-        message: `commented: "${content.substring(0, 30)}..."`,
-        targetId: postId,
+      // ✅ High Scale Fix: Offload to worker
+      await godateQueue.add("notif", {
+        type: "NOTIFICATION",
+        data: {
+          receiverId: post.author,
+          notificationData: {
+            type: "NEW_COMMENT",
+            senderId: user._id,
+            senderName: user.name,
+            senderAvatar: user.avatar,
+            message: `commented: "${content.substring(0, 30)}..."`,
+            targetId: postId,
+          }
+        }
       });
     }
 
@@ -74,11 +81,17 @@ export const addComment = async (req, res) => {
 export const getPostComments = async (req, res) => {
   try {
     const { postId } = req.params;
-    const cached = await getMatchesCache("global", `post_comments_${postId}`);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+
+    const cacheKey = `post_comments_${postId}_${page}`;
+    const cached = await getMatchesCache("global", cacheKey);
     if (cached) return res.status(200).json(cached);
 
     const comments = await Comment.find({ post: postId })
       .sort({ createdAt: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
       .populate("author", "name avatar")
       .populate({
         path: "parentComment",
@@ -86,8 +99,16 @@ export const getPostComments = async (req, res) => {
         populate: { path: "author", select: "name" },
       })
       .lean();
-    await setMatchesCache("global", `post_comments_${postId}`, comments, COMMENTS_CACHE_TTL);
-    res.status(200).json(comments);
+
+    const totalComments = await Comment.countDocuments({ post: postId });
+    const result = {
+      comments,
+      hasMore: page * limit < totalComments,
+      nextPage: page * limit < totalComments ? page + 1 : null,
+    };
+
+    await setMatchesCache("global", cacheKey, result, COMMENTS_CACHE_TTL);
+    res.status(200).json(result);
   } catch (error) {
     console.error("Get Post Comments Error:", error);
     const errorMessage =
@@ -142,5 +163,47 @@ export const deleteComment = async (req, res) => {
         ? "Server error. Please try again later."
         : error.message;
     res.status(500).json({ message: errorMessage });
+  }
+};
+
+export const toggleLikeComment = async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    const userId = req.user.userId;
+
+    const comment = await Comment.findById(commentId);
+    if (!comment) return res.status(404).json({ message: "Comment not found" });
+
+    const existingLike = await Like.findOne({
+      user: userId,
+      targetId: commentId,
+      targetType: "Comment",
+    });
+
+    let isLiked = false;
+    if (existingLike) {
+      await Like.findByIdAndDelete(existingLike._id);
+      await Comment.findByIdAndUpdate(commentId, { $inc: { likeCount: -1 } });
+      isLiked = false;
+    } else {
+      try {
+        await Like.create({
+          user: userId,
+          targetId: commentId,
+          targetType: "Comment",
+        });
+        await Comment.findByIdAndUpdate(commentId, { $inc: { likeCount: 1 } });
+        isLiked = true;
+      } catch (err) {
+        if (err.code === 11000) return res.status(200).json({ isLiked: true });
+        throw err;
+      }
+    }
+
+    const updated = await Comment.findById(commentId).select("likeCount");
+    res.status(200).json({ isLiked, likeCount: Math.max(0, updated.likeCount) });
+  } catch (error) {
+    console.error("Like Comment Error:", error);
+    res.status(500).json({ message: "Error liking comment" });
   }
 };

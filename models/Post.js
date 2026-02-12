@@ -15,15 +15,10 @@ const postSchema = new mongoose.Schema({
     required: true,
     maxlength: 2200
   },
-  country: {
-    type: String,
-    required: true,
-    index: true
+  likeCount: {
+    type: Number,
+    default: 0
   },
-  likes: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
   commentCount: {
     type: Number,
     default: 0
@@ -31,6 +26,7 @@ const postSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 postSchema.index({ country: 1, createdAt: -1 });
+postSchema.index({ author: 1, createdAt: -1 });
 
 const Post = mongoose.model('Post', postSchema);
 export default Post;

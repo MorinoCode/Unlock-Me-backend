@@ -1,6 +1,7 @@
 
 import { Worker } from "bullmq";
 import { addToExploreIndex, removeFromExploreIndex } from "../utils/redisMatchHelper.js";
+import { bullMQConnection } from "../config/redis.js";
 import User from "../models/User.js";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
@@ -54,10 +55,7 @@ const workerHandler = async (job) => {
 
 // Initialize BullMQ Worker
 const exploreWorker = new Worker("explore-queue", workerHandler, {
-    connection: {
-        host: process.env.REDIS_HOST || "127.0.0.1",
-        port: process.env.REDIS_PORT || 6379,
-    },
+    connection: bullMQConnection,
     concurrency: 5 // Parallel processing
 });
 

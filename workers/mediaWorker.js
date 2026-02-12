@@ -72,7 +72,7 @@ const workerHandler = async (job) => {
 
     // Save to DB
     const oldUser = user.toObject();
-    const updatedUser = await User.findByIdAndUpdate(userId, { $set: updateData }, { new: true }).select("-password");
+    await User.findByIdAndUpdate(userId, { $set: updateData }, { new: true }).select("-password");
 
     // Invalidate Caches
     await Promise.all([

@@ -3,7 +3,6 @@ import GoDateApply from "../../models/GoDateApply.js";
 import User from "../../models/User.js";
 import Chat from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
-import { emitNotification } from "../../utils/notificationHelper.js";
 import cloudinary from "../../config/cloudinary.js";
 import {
   getGoDateConfig,
@@ -246,7 +245,6 @@ export const applyForDate = async (req, res) => {
   try {
     const { dateId } = req.body;
     const userId = req.user._id;
-    const io = req.app.get("io");
 
     // ✅ Critical Fix: Use session for atomic read
     const date = await GoDate.findById(dateId).session(session);
@@ -547,7 +545,6 @@ export const cancelGoDate = async (req, res) => {
   try {
     const { dateId } = req.params;
     const userId = req.user._id;
-    const io = req.app.get("io");
 
     const date = await GoDate.findById(dateId);
     if (!date) return res.status(404).json({ error: "Date not found" });

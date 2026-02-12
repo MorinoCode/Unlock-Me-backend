@@ -1,6 +1,5 @@
 import { Worker } from "bullmq";
 import User from "../models/User.js";
-import { emitNotification } from "../utils/notificationHelper.js";
 import { 
     invalidateUserCache, 
     invalidateMatchesCache, 
@@ -14,7 +13,7 @@ const connection = {
 };
 
 const swipeWorkerHandler = async (job) => {
-    const { userId, targetUserId, action, isMatch, io } = job.data;
+    const { userId, targetUserId, action, isMatch } = job.data;
     console.log(`[SwipeWorker] ⚙️ Processing ${action} from ${userId} to ${targetUserId}`);
 
     try {
@@ -84,7 +83,7 @@ const swipeWorker = new Worker("swipe-action-queue", swipeWorkerHandler, {
     concurrency: 10 // Higher concurrency as these are simple DB writes
 });
 
-swipeWorker.on("completed", (job) => {
+swipeWorker.on("completed", () => {
     // console.log(`[SwipeWorker] Job ${job.id} completed!`);
 });
 

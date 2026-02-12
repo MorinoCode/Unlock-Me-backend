@@ -49,7 +49,7 @@ const notificationWorker = new Worker("notification-queue", workerHandler, {
   concurrency: 20, // Process 20 notifications at once (Scalable!)
 });
 
-notificationWorker.on("completed", (job) => {
+notificationWorker.on("completed", () => {
   // Silent success
 });
 

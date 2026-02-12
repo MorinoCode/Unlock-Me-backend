@@ -8,7 +8,6 @@ import { calculateUserDNA, calculateCompatibility } from "../../utils/matchUtils
 import Conversation from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
 import Post from "../../models/Post.js";
-import Notification from "../../models/notification.js";
 import GoDate from "../../models/GoDate.js";
 import GoDateApply from "../../models/GoDateApply.js";
 import { getMatchListLimit } from "../../utils/matchUtils.js";
@@ -356,7 +355,7 @@ export const forgotPassword = async (req, res) => {
     user.password = await bcrypt.hash(tempPassword, salt);
     await user.save();
 
-    const { data, error } = await resend.emails.send({
+    const { error } = await resend.emails.send({
       from: "UnlockMe Support <noreply@unlock-me.app>", 
       to: [email],
       subject: "Your New Password - UnlockMe",
@@ -417,7 +416,7 @@ export const deleteAccount = async (req, res) => {
       // ✅ Bug Fix #2: Delete chat file attachments from Cloudinary
       const userMessages = await Message.find({
         sender: userId,
-        fileUrl: { $exists: true, $ne: null, $ne: "" }
+        fileUrl: { $exists: true, $nin: [null, ""] }
       });
       for (const msg of userMessages) {
         if (msg.fileUrl) {

@@ -296,7 +296,7 @@ io.use((socket, next) => {
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (err) {
+    } catch {
       // If access token failed, try refresh token secret
       const refreshToken = cookies["unlock-me-refresh-token"];
       if (refreshToken) {

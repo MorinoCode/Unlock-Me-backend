@@ -1,5 +1,4 @@
 import { Queue } from "bullmq";
-import redisClient from "./redis.js";
 
 // Create a new queue instance
 // We use the existing redisClient connection details but BullMQ needs its own connection logic

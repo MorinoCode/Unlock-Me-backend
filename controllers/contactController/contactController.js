@@ -35,7 +35,7 @@ export const submitContactForm = async (req, res) => {
       </div>
     `;
 
-    const { data, error } = await resend.emails.send({
+    const { error } = await resend.emails.send({
       from: "Unlock-Me Support <noreply@unlock-me.app>",
       to: ["support@unlock-me.app"], // Recipient address as discussed
       subject: `[Contact Form] ${subject}`,

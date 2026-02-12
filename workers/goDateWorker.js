@@ -1,8 +1,6 @@
 import { Worker } from "bullmq";
 import GoDate from "../models/GoDate.js";
-import GoDateApply from "../models/GoDateApply.js";
 import cloudinary from "../config/cloudinary.js";
-import mongoose from "mongoose";
 import dotenv from "dotenv";
 
 dotenv.config();

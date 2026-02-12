@@ -1,6 +1,6 @@
 import User from "../../models/User.js";
 import { calculateCompatibility, generateMatchInsights } from "../../utils/matchUtils.js";
-import { getVisibilityThreshold, getMatchListLimit } from "../../utils/subscriptionRules.js";
+import { getMatchListLimit } from "../../utils/subscriptionRules.js";
 // ✅ Performance Fix: Import cache helpers
 import { getMatchesCache, setMatchesCache } from "../../utils/cacheHelper.js";
 
@@ -33,6 +33,7 @@ export const getMatchesDashboard = async (req, res) => {
     const myLikedIdsSet = new Set(myLikedIds);
     const myLikedByIdsSet = new Set(myLikedByIds);
     const myMatchesIdsSet = new Set(myMatchesIds);
+    const mySuperLikedByIdsSet = new Set(mySuperLikedByIds);
     const myDislikedIdsSet = new Set((user.dislikedUsers || []).map(id => id.toString()));
     const myBlockedIdsSet = new Set([
       ...(user.blockedUsers || []).map(id => id.toString()),
@@ -42,7 +43,6 @@ export const getMatchesDashboard = async (req, res) => {
     
     // Get visibility threshold for current user's plan
     const userPlan = user.subscription?.plan || "free";
-    const visibilityThreshold = getVisibilityThreshold(userPlan);
 
     if (!type) {
       // ✅ Cache full dashboard (no type)
@@ -54,7 +54,6 @@ export const getMatchesDashboard = async (req, res) => {
       const pageNum = parseInt(page);
       const limitNum = parseInt(limit);
       let targetIds = [];
-      let isIncomingType = false;
 
       if (type === 'mutual') {
         targetIds = myMatchesIds.length > 0 
@@ -62,7 +61,6 @@ export const getMatchesDashboard = async (req, res) => {
           : myLikedIds.filter(id => myLikedByIdsSet.has(id) && !myDislikedIdsSet.has(id) && !myBlockedIdsSet.has(id));
       } 
       else if (type === 'incoming') {
-        isIncomingType = true;
         // Merge superlikes into incoming for view-all too
         const incomingNotMatched = myLikedByIds.filter(id => !myLikedIdsSet.has(id) && !myMatchesIdsSet.has(id));
         const superNotMatched = mySuperLikedByIds.filter(id => !myMatchesIdsSet.has(id));

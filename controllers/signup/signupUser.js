@@ -2,7 +2,6 @@ import bcrypt from "bcryptjs";
 import User from "../../models/User.js";
 import jwt from "jsonwebtoken";
 import { validatePassword } from "../../utils/validators.js";
-import redisClient from "../../config/redis.js";
 
 const FORBIDDEN_USERNAMES = ["admin", "support", "root", "unlockme", "moderator"];
 

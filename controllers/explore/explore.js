@@ -2,20 +2,11 @@ import User from "../../models/User.js";
 import {
   calculateCompatibility,
   calculateUserDNA,
-  shuffleArray,
-  generateMatchInsights,
   getVisibilityThreshold,
-  getSoulmatePermissions,
-  escapeRegex,
+  generateMatchInsights,
 } from "../../utils/matchUtils.js";
 import { getMatchesCache, setMatchesCache } from "../../utils/cacheHelper.js";
 import {
-  getCompatibilityScore,
-  setCompatibilityScore,
-  getFromPotentialPoolPaginated,
-  getCompatibilityScoreBatch,
-  batchSetCompatibilityScores,
-  REDIS_PREFIXES
 } from "../../utils/redisMatchHelper.js";
 import redisClient from "../../config/redis.js";
 import { findMatchesForSection } from "../../workers/exploreMatchWorker.js";
@@ -54,8 +45,6 @@ export const getExploreMatches = async (req, res) => {
   console.log(`========================================`);
   
   try {
-    const currentUserId = req.user.userId;
-
     console.log(`[Explore] ForceRefresh: ${!!forceRefresh}`);
 
     // ✅ NEW: Check Redis for 5-section data

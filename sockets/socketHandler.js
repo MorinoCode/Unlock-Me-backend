@@ -10,75 +10,7 @@ import { addToQueue } from "../utils/blindDateService.js";
 // Redis sharding and atomic updates are handled in blindDateService.
 
 
-/**
- * Returns a short reason why user1 and user2 don't match (or "MATCH").
- * Used for debug logging when testing blind date.
- */
-function getMatchReason(user1, user2) {
-  const id1 = String(user1.userId);
-  const id2 = String(user2.userId);
-  if (id1 === id2) return "same_user";
 
-  const c1 = (user1.criteria.location?.country ?? "").trim().toLowerCase();
-  const c2 = (user2.criteria.location?.country ?? "").trim().toLowerCase();
-  const countryMatch =
-    !c1 || !c2 || c1 === "unknown" || c2 === "unknown" || c1 === c2;
-  if (!countryMatch)
-    return `country_mismatch(${c1 || "empty"} vs ${c2 || "empty"})`;
-
-  const u1Gender =
-    (user1.criteria.gender ?? "").trim().toLowerCase() || "other";
-  const u1Looking = (user1.criteria.lookingFor ?? "").trim().toLowerCase();
-  const u2Gender =
-    (user2.criteria.gender ?? "").trim().toLowerCase() || "other";
-  const u2Looking = (user2.criteria.lookingFor ?? "").trim().toLowerCase();
-
-  if (!u1Looking) return "user1_lookingFor_empty";
-  if (!u2Looking) return "user2_lookingFor_empty";
-
-  const match1 = u1Looking === u2Gender;
-  const match2 = u2Looking === u1Gender;
-  if (!match1)
-    return `gender_mismatch: user1 lookingFor=${u1Looking} vs user2 gender=${u2Gender}`;
-  if (!match2)
-    return `gender_mismatch: user2 lookingFor=${u2Looking} vs user1 gender=${u1Gender}`;
-
-  return "MATCH";
-}
-
-/**
- * Match two users for Blind Date.
- * App only has Male, Female, Other (no "All").
- * - Different users (userId comparison as string)
- * - Country: same country, or either missing/empty → allow
- * - Gender: each user's lookingFor must equal the other's gender (Male/Female/Other)
- */
-const findMatch = (user1) => {
-  const id1 = String(user1.userId);
-  return blindQueue.find((user2) => {
-    const id2 = String(user2.userId);
-    if (id1 === id2) return false;
-
-    const c1 = (user1.criteria.location?.country ?? "").trim().toLowerCase();
-    const c2 = (user2.criteria.location?.country ?? "").trim().toLowerCase();
-    const countryMatch =
-      !c1 || !c2 || c1 === "unknown" || c2 === "unknown" || c1 === c2;
-    if (!countryMatch) return false;
-
-    const u1Gender =
-      (user1.criteria.gender ?? "").trim().toLowerCase() || "other";
-    const u1Looking = (user1.criteria.lookingFor ?? "").trim().toLowerCase();
-    const u2Gender =
-      (user2.criteria.gender ?? "").trim().toLowerCase() || "other";
-    const u2Looking = (user2.criteria.lookingFor ?? "").trim().toLowerCase();
-
-    if (!u1Looking || !u2Looking) return false;
-    const match1 = u1Looking === u2Gender;
-    const match2 = u2Looking === u1Gender;
-
-    return match1 && match2;
-  });
-};
 
 export const handleSocketConnection = (io, socket, userSocketMap) => {
   const userId = socket.handshake.query.userId;

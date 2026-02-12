@@ -1,8 +1,6 @@
 import User from "../../models/User.js";
 import InitialQuizzes from "../../models/initialQuizzes.js";
 import questionByCategory from "../../models/questionByCategory.js";
-import { calculateUserDNA } from "../../utils/matchUtils.js";
-import cloudinary from "../../config/cloudinary.js";
 import { findMatchesForUser } from "../../workers/exploreMatchWorker.js";
 import { mediaQueue, onboardingQueue } from "../../config/queue.js";
 
@@ -383,7 +381,6 @@ export const checkMatchStatus = async (req, res) => {
     const user = await User.findById(userId).select("potentialMatches lastMatchCalculation");
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const dbHasMatches = user.potentialMatches && user.potentialMatches.length > 0;
     
     // Also check Redis for high-speed readiness
     const { REDIS_PREFIXES } = await import("../../utils/redisMatchHelper.js");

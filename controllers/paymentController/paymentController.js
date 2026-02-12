@@ -11,7 +11,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // نگاشت کشور به ارز (کد ISO کشور -> کد ارز Stripe)
 const COUNTRY_TO_CURRENCY = {
   SE: "sek",
-  SV: "sek", // Sweden, El Salvador (SEK = Swedish Krona)
+  SV: "usd", // ✅ Fix #19: SV is El Salvador (uses USD), not Sweden (SE is Sweden)
   US: "usd",
   GB: "gbp",
   CA: "cad",
@@ -97,12 +97,15 @@ export const getSubscriptionPlans = async (req, res) => {
         );
         if (match) chosen = match;
       }
+      // ✅ Bug Fix: Handle zero-decimal currencies (JPY, KRW, etc.)
+      const ZERO_DECIMAL_CURRENCIES = ['bif','clp','djf','gnf','jpy','kmf','krw','mga','pyg','rwf','ugx','vnd','vuv','xaf','xof','xpf'];
+      const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.includes(chosen.currency?.toLowerCase());
       plans.push({
         id: chosen.id,
         nickname: chosen.nickname,
         amount:
           chosen.unit_amount != null
-            ? Math.round(chosen.unit_amount / 100)
+            ? isZeroDecimal ? chosen.unit_amount : Math.round(chosen.unit_amount / 100)
             : null,
         currency: chosen.currency?.toLowerCase() || chosen.currency,
         interval: chosen.recurring?.interval || "month",
@@ -179,7 +182,7 @@ export const createCheckoutSession = async (req, res) => {
   }
 };
 
-// ✅ Cancel Subscription
+// ✅ Cancel Subscription (now actually cancels Stripe subscription)
 export const cancelSubscription = async (req, res) => {
   try {
     const userId = req.user._id || req.user.userId;
@@ -194,7 +197,24 @@ export const cancelSubscription = async (req, res) => {
       return res.status(400).json({ message: "No active subscription to cancel" });
     }
 
-    // Update subscription status to canceled
+    // ✅ Cancel the actual Stripe subscription (if we have the ID)
+    const stripeSubId = user.subscription?.stripeSubscriptionId;
+    if (stripeSubId) {
+      try {
+        // cancel_at_period_end = true → user keeps access until end of billing period
+        await stripe.subscriptions.update(stripeSubId, {
+          cancel_at_period_end: true
+        });
+        console.log(`✅ Stripe subscription ${stripeSubId} set to cancel at period end`);
+      } catch (stripeErr) {
+        // If subscription already canceled or not found, log but continue
+        console.warn(`⚠️ Stripe cancel warning for ${stripeSubId}:`, stripeErr.message);
+      }
+    } else {
+      console.warn(`⚠️ No stripeSubscriptionId found for user ${userId}. DB-only cancel.`);
+    }
+
+    // Update subscription status to canceled in DB
     // Keep expiresAt as is (user keeps access until expiry)
     await User.findByIdAndUpdate(userId, {
       $set: {
@@ -220,7 +240,7 @@ export const cancelSubscription = async (req, res) => {
   }
 };
 
-// ✅ Change Plan (creates new checkout session for upgrade/downgrade)
+// ✅ Improvement #20: Change Plan (modify existing Stripe subscription instead of new checkout)
 export const changePlan = async (req, res) => {
   try {
     const { priceId, planName } = req.body;
@@ -235,7 +255,48 @@ export const changePlan = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Create checkout session for plan change
+    const stripeSubId = user.subscription?.stripeSubscriptionId;
+
+    // If user has an active Stripe subscription, modify it instead of creating a new one
+    if (stripeSubId) {
+      try {
+        const subscription = await stripe.subscriptions.retrieve(stripeSubId);
+        if (subscription && subscription.status !== 'canceled') {
+          // Update the subscription with the new price
+          const updatedSubscription = await stripe.subscriptions.update(stripeSubId, {
+            items: [{
+              id: subscription.items.data[0].id,
+              price: priceId,
+            }],
+            proration_behavior: 'create_prorations',
+          });
+
+          // Update local DB
+          const planLower = planName.toLowerCase();
+          let planType = 'premium';
+          if (planLower.includes('diamond')) planType = 'diamond';
+          else if (planLower.includes('platinum')) planType = 'platinum';
+          else if (planLower.includes('gold')) planType = 'gold';
+
+          await User.findByIdAndUpdate(userId, {
+            $set: {
+              "subscription.plan": planType,
+              "subscription.status": "active",
+            }
+          });
+
+          return res.json({ 
+            success: true, 
+            message: `Plan changed to ${planType}`,
+            subscriptionId: updatedSubscription.id 
+          });
+        }
+      } catch (stripeErr) {
+        console.warn(`⚠️ Could not modify existing subscription: ${stripeErr.message}. Falling back to new checkout.`);
+      }
+    }
+
+    // Fallback: Create new checkout session if no existing subscription
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
@@ -345,11 +406,19 @@ export const verifyPaymentAndUpdateSubscription = async (req, res) => {
       planType = 'platinum';
     } else if (planLower.includes('gold')) {
       planType = 'gold';
+    } else {
+      // ✅ Bug Fix: Any paid plan that doesn't match specific tiers gets premium
+      planType = 'premium';
     }
 
     // Calculate expiration date (30 days from now)
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 30);
+
+    // Get Stripe subscription ID from session
+    const stripeSubId = typeof session.subscription === 'string' 
+      ? session.subscription 
+      : session.subscription?.id || null;
 
     // Update database
     const updatedUser = await User.findByIdAndUpdate(userId, {
@@ -357,6 +426,11 @@ export const verifyPaymentAndUpdateSubscription = async (req, res) => {
         "subscription.plan": planType,
         "subscription.status": "active",
         "subscription.expiresAt": expiresAt,
+        "subscription.stripeSubscriptionId": stripeSubId,
+        "subscription.stripeCustomerId": session.customer || null,
+        "subscription.isTrial": false,         // ✅ Payment success: trial ends
+        "subscription.trialExpiresAt": null,   // ✅ Payment success: trial ends
+        "subscription.startedAt": new Date()   // ✅ Record start date
       }
     }, { new: true });
 

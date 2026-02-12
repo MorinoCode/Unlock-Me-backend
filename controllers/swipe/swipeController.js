@@ -17,6 +17,8 @@ import {
   setMatchesCache,
   invalidateUserCache,
 } from "../../utils/cacheHelper.js";
+import redisClient from "../../config/redis.js";
+import { checkAndRefillFeed } from "../../workers/swipeFeedWorker.js";
 
 const isSameDay = (d1, d2) => {
   return (
@@ -30,7 +32,7 @@ export const getSwipeCards = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.userId;
 
-    // ✅ Performance Fix: Try cache first
+    // ✅ Performance Fix: Try cache first (short TTL since feed changes)
     const cached = await getMatchesCache(currentUserId, "swipe");
     if (cached) {
       return res.status(200).json(cached);
@@ -56,56 +58,59 @@ export const getSwipeCards = async (req, res) => {
       });
     }
 
-    // ✅ Exclude users I've already interacted with
-    const excludeIds = [
-      currentUserId,
-      ...(me.likedUsers || []).map((id) => id.toString()),
-      ...(me.dislikedUsers || []).map((id) => id.toString()),
-      ...(me.superLikedUsers || []).map((id) => id.toString()),
-    ];
+    // ✅ NEW ARCHITECTURE: Fetch from Redis feed instead of live aggregation
+    const feedKey = `swipe:feed:${currentUserId}`;
+    console.log(`[SwipeCards] Checking Redis feed: ${feedKey}`);
 
-    // ✅ Also exclude users who have disliked me (bidirectional exclusion)
-    // Find users who have me in their dislikedUsers array
-    const usersWhoDislikedMe = await User.find({
-      dislikedUsers: currentUserId
-    })
-      .select("_id")
-      .lean();
-    
-    const usersWhoDislikedMeIds = usersWhoDislikedMe.map(u => u._id.toString());
-    excludeIds.push(...usersWhoDislikedMeIds);
+    let feedIds = await redisClient.lRange(feedKey, 0, 19); // Get first 20 IDs
+    console.log(`[SwipeCards] Feed IDs from Redis: ${feedIds.length}`);
 
-    // ✅ Performance Fix: Better query optimization
-    let query = {
-      _id: { $nin: excludeIds },
-      "location.country": myCountry, // Use exact match instead of regex for better performance
-      dna: { $exists: true, $ne: null }, // Only users with DNA
-    };
-
-    if (me.lookingFor) {
-      query.gender = me.lookingFor;
+    // If feed is empty or low, trigger refill in background
+    if (feedIds.length < 20) { // Threshold 20
+      console.log(`⚠️ [SwipeCards] Feed LOW/EMPTY (${feedIds.length} < 20). Triggering refill...`);
+      checkAndRefillFeed(currentUserId).catch(err => 
+        console.error(`Background refill failed for ${currentUserId}:`, err)
+      );
+      
+      // If completely empty, fetch from Redis after waiting a moment
+      if (feedIds.length === 0) {
+        console.log(`[SwipeCards] Feed completely empty. Waiting 1s for refill...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        feedIds = await redisClient.lRange(feedKey, 0, 19);
+        console.log(`[SwipeCards] After wait, feed size: ${feedIds.length}`);
+      }
+    } else {
+      console.log(`✅ [SwipeCards] Feed OK (${feedIds.length} users available)`);
     }
 
-    // ✅ Performance Fix: Optimized aggregation - match before sample
-    const candidates = await User.aggregate([
-      { $match: query },
-      { $sample: { size: 20 } },
-      {
-        $project: {
-          name: 1,
-          birthday: 1,
-          avatar: 1,
-          gallery: 1,
-          bio: 1,
-          gender: 1,
-          location: 1,
-          voiceIntro: 1,
-          interests: 1,
-          dna: 1,
-          isVerified: 1,
-        },
-      },
-    ]);
+    // If still no feed (new user or error), return empty
+    if (feedIds.length === 0) {
+      console.error(`❌ [SwipeCards] NO FEED AVAILABLE for ${currentUserId}!`);
+      console.error(`❌ [SwipeCards] Possible причины:`);
+      console.error(`   1. Worker not run during signup`);
+      console.error(`   2. Redis connection issue`);
+      console.error(`   3. No users in database match criteria`);
+      console.log(`========================================\n`);
+      return res.status(200).json({
+        cards: [],
+        message: "No more cards available. Please check back later."
+      });
+    }
+
+    console.log(`[SwipeCards] Fetching ${feedIds.length} user details from MongoDB...`);
+    const candidates = await User.find({ _id: { $in: feedIds } })
+      .select("name birthday avatar gallery bio gender location voiceIntro interests dna isVerified")
+      .lean();
+
+    console.log(`[SwipeCards] Fetched ${candidates.length} users from DB`);
+
+    // Preserve order from Redis feed
+    const orderedCandidates = feedIds
+      .map(id => candidates.find(c => c._id.toString() === id))
+      .filter(Boolean);
+
+    console.log(`[SwipeCards] Ordered candidates: ${orderedCandidates.length}`);
+
 
     const enrichedCards = candidates
       .map((user) => {
@@ -416,6 +421,27 @@ export const handleSwipeAction = async (req, res) => {
           targetId: currentUserId.toString(),
         });
       }
+    }
+
+    // ✅ NEW: Update Redis Feed & History
+    try {
+      const feedKey = `swipe:feed:${currentUserId}`;
+      const historyKey = `swipe:history:${currentUserId}`;
+      
+      // Remove swiped user from feed
+      await redisClient.lRem(feedKey, 1, targetUserId.toString());
+      
+      // Add to history SET
+      await redisClient.sAdd(historyKey, targetUserId.toString());
+      await redisClient.expire(historyKey, 7 * 24 * 60 * 60); // 7 days TTL
+      
+      // Trigger auto-refill check in background
+      checkAndRefillFeed(currentUserId).catch(err => 
+        console.error(`Auto-refill failed for ${currentUserId}:`, err)
+      );
+    } catch (redisErr) {
+      console.error(`Redis update failed for ${currentUserId}:`, redisErr.message);
+      // Don't fail the request if Redis fails
     }
 
     // ✅ Bug Fix: Commit transaction

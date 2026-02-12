@@ -59,7 +59,15 @@ const goDateSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-goDateSchema.index({ "location.city": 1, dateTime: 1 });
+goDateSchema.index({
+  status: 1,
+  "location.city": 1,
+  category: 1,
+  dateTime: 1,
+});
+
+// For owner queries and performance
+goDateSchema.index({ creator: 1, createdAt: -1 });
 
 const GoDate = mongoose.model("GoDate", goDateSchema);
 export default GoDate;

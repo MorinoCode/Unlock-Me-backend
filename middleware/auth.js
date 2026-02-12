@@ -2,10 +2,19 @@ import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
 export const protect = async (req, res, next) => {
+  const isInterestsOptions = req.path === "/interests-options" || req.originalUrl?.includes("interests-options");
+  if (isInterestsOptions) {
+    console.log("[interests-options] 0/6 AUTH protect entered", {
+      hasCookie: !!req.cookies["unlock-me-token"],
+      hasRefresh: !!req.cookies["unlock-me-refresh-token"],
+    });
+  }
+
   const token = req.cookies["unlock-me-token"];
   const refreshToken = req.cookies["unlock-me-refresh-token"];
 
   if (!token && !refreshToken) {
+    if (isInterestsOptions) console.log("[interests-options] 0/6 AUTH reject", "no token");
     return res.status(401).json({ message: "No token, authorization denied" });
   }
 
@@ -75,11 +84,25 @@ export const protect = async (req, res, next) => {
       return res.status(401).json({ message: "User not found" });
     }
 
-    req.user = user;
-    req.user.userId = user._id.toString(); 
+    // ✅ Trial Expiration Fix: Real-time check
+    if (user.subscription?.isTrial && user.subscription?.trialExpiresAt && new Date() > new Date(user.subscription.trialExpiresAt)) {
+      console.log(`⏳ Trial expired for user ${user._id}. Downgrading to free...`);
+      user.subscription.plan = "free";
+      user.subscription.isTrial = false;
+      user.subscription.trialExpiresAt = null;
+      user.subscription.expiresAt = null;
+      await user.save();
+    }
 
+    req.user = user;
+    req.user.userId = user._id.toString();
+
+    if (isInterestsOptions) console.log("[interests-options] 0/6 AUTH ok", { userId: req.user.userId });
     next();
-  } catch {
+  } catch (authErr) {
+    if (isInterestsOptions) {
+      console.log("[interests-options] 0/6 AUTH reject", authErr?.message || "Token is not valid");
+    }
     // ✅ Security Fix: Don't expose error details
     return res.status(401).json({ message: "Token is not valid" });
   }

@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import User from "../../models/User.js";
 import jwt from "jsonwebtoken";
 import { validatePassword } from "../../utils/validators.js";
+import redisClient from "../../config/redis.js";
 
 const FORBIDDEN_USERNAMES = ["admin", "support", "root", "unlockme", "moderator"];
 
@@ -43,14 +44,25 @@ export const signupUser = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // 5. ساخت کاربر
+    // 5. ساخت کاربر با 7 روز Platinum Trial رایگان
+    const trialExpiresAt = new Date();
+    trialExpiresAt.setDate(trialExpiresAt.getDate() + 7);
+
     const newUser = new User({
-      name, // حروف بزرگ حفظ می‌شود
+      name,
       username,
       email,
       password: hashedPassword,
       gender,
       lookingFor,
+      subscription: {
+        plan: "platinum",
+        status: "active",
+        isTrial: true,
+        trialExpiresAt: trialExpiresAt,
+        expiresAt: trialExpiresAt,
+        startedAt: new Date(),
+      },
     });
 
     await newUser.save();
@@ -95,8 +107,16 @@ export const signupUser = async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
+    // ✅ Trigger Redis Sync (Add new user to Explore)
+    const { dispatchExploreSync } = await import("../../utils/workerDispatcher.js");
+    dispatchExploreSync(newUser._id, null); // New user has no "old data"
+    
+    // ❌ REMOVED: Worker execution moved to Analysis Page
+    // Workers will run AFTER onboarding when user info is complete
+    
     res.status(201).json({
       message: "User registered successfully",
+      token: accessToken, // Assuming 'token' refers to accessToken
       user: {
         id: newUser._id,
         name: newUser.name,

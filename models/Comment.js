@@ -21,11 +21,14 @@ const commentSchema = new mongoose.Schema({
     ref: 'Comment',
     default: null
   },
-  likes: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }]
+  likeCount: {
+    type: Number,
+    default: 0
+  }
 }, { timestamps: true });
+
+commentSchema.index({ post: 1, createdAt: 1 });
+commentSchema.index({ parentComment: 1 });
 
 const Comment = mongoose.model('Comment', commentSchema);
 export default Comment;

@@ -8,13 +8,17 @@ import {
   getSoulmatePermissions,
   escapeRegex,
 } from "../../utils/matchUtils.js";
-// ✅ Performance Fix: Import cache helpers
 import { getMatchesCache, setMatchesCache } from "../../utils/cacheHelper.js";
 import {
   getCompatibilityScore,
   setCompatibilityScore,
   getFromPotentialPoolPaginated,
+  getCompatibilityScoreBatch,
+  batchSetCompatibilityScores,
+  REDIS_PREFIXES
 } from "../../utils/redisMatchHelper.js";
+import redisClient from "../../config/redis.js";
+import { findMatchesForSection } from "../../workers/exploreMatchWorker.js";
 
 export const getUserLocation = async (req, res) => {
   try {
@@ -31,347 +35,220 @@ export const getUserLocation = async (req, res) => {
 };
 
 export const getExploreMatches = async (req, res) => {
-  try {
-    const { category, page = 1, limit = 10 } = req.query; 
-    const currentUserId = req.user.userId;
-    const pageNum = Math.max(1, parseInt(page));
-    const limitNum = Math.min(20, Math.max(1, parseInt(limit))); // Limit max items to 20 for safety
+  const start = Date.now();
+  const { forceRefresh, category, page = 1, limit = 20 } = req.query; // Added category, page, limit
 
-    // ✅ Performance Fix: Try cache first
-    const cacheKey = category || 'overview';
-    const cached = await getMatchesCache(currentUserId, `explore_${cacheKey}_${pageNum}`);
-    if (cached) {
-      return res.status(200).json(cached);
+  // ✅ CASE 1: View All / Category Pagination
+  if (category) {
+    try {
+      return await handleCategoryPagination(req, res, category, page, limit);
+    } catch (err) {
+      console.error("Category Pagination Error:", err);
+      return res.status(500).json({ message: "Failed to load category matches" });
+    }
+  }
+
+  // ✅ CASE 2: Main Explore Page (All Sections)
+  console.log(`\n========================================`);
+  console.log(`[Explore] 📋 GET REQUEST for user: ${req.user.userId}`);
+  console.log(`========================================`);
+  
+  try {
+    const currentUserId = req.user.userId;
+
+    console.log(`[Explore] ForceRefresh: ${!!forceRefresh}`);
+
+    // ✅ NEW: Check Redis for 5-section data
+    const cacheKey = `analysis:sections:${req.user.userId}`;
+    console.log(`[Explore] Checking Redis cache: ${cacheKey}`);
+    
+    let sections;
+
+    if (!forceRefresh) {
+      const cachedSections = await redisClient.get(cacheKey);
+      if (cachedSections) {
+        sections = JSON.parse(cachedSections);
+        console.log(`✅ [Explore] CACHE HIT! (${Date.now() - start}ms)`);
+        res.set('X-Cache', 'HIT'); // ✅ Checkable in Browser Network Tab
+      } else {
+        console.log(`⚠️ [Explore] CACHE MISS! Generating fresh data...`);
+        res.set('X-Cache', 'MISS');
+      }
+    }
+
+    if (!sections) {
+      console.log(`[Explore] Triggering generateAnalysisData worker...`);
+      const { generateAnalysisData } = await import("../../workers/exploreMatchWorker.js");
+      sections = await generateAnalysisData(req.user.userId);
+    }
+
+    if (!sections) {
+      return res.status(200).json({
+        mode: "sections",
+        sections: {
+          cityMatches: [],
+          freshFaces: [],
+          interestMatches: [],
+          soulmates: [],
+          countryMatches: []
+        },
+        message: "No matches found."
+      });
+    }
+
+    // ✅ MAP BACKEND KEYS TO FRONTEND KEYS
+    const mappedSections = {
+      cityMatches: sections.nearYou || [],
+      freshFaces: sections.freshFaces || [],
+      interestMatches: sections.compatibilityVibes || [],
+      soulmates: null, // Special box (no users)
+      countryMatches: sections.acrossTheCountry || []
+    };
+
+    console.log(`✅ [Explore] Returning Mapped Sections (${Date.now() - start}ms)`);
+    console.log(`========================================\n`);
+
+    return res.status(200).json({
+      mode: "sections",
+      sections: mappedSections,
+      soulmatesMetadata: {
+        description: "Soulmates are users with over 90% DNA match",
+        isPremiumFeature: true,
+        requiresPlan: ["gold", "platinum"]
+      },
+      cached: false // Simplified
+    });
+
+  } catch (err) {
+    console.error("Explore Error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Helper for Category Pagination
+const handleCategoryPagination = async (req, res, category, page, limit) => {
+  // Map frontend category to backend section key
+  const categoryMap = {
+    "nearby": "nearYou",
+    "new": "freshFaces",
+    "interests": "compatibilityVibes",
+    "soulmates": "soulmates",
+    "country": "acrossTheCountry"
+  };
+
+  const backendSection = categoryMap[category] || category;
+
+  // ✅ Use new loadMoreSection from loadMoreSection.js
+  const { loadMoreSection: newLoadMoreSection } = await import("./loadMoreSection.js");
+  
+  // Mock req.body for the new controller
+  req.body = { section: backendSection, page: parseInt(page), limit: parseInt(limit) };
+  return newLoadMoreSection(req, res);
+};
+
+// ✅ NEW: Load More Section (150/page pagination)
+export const loadMoreSection = async (req, res) => {
+  try {
+    const { section, page = 1 } = req.body;
+    const currentUserId = req.user.userId;
+    const LIMIT = 150;
+
+    console.log(`\n========================================`);
+    console.log(`[Explore] 📄 LOAD MORE: section=${section}, page=${page}`);
+    console.log(`[Explore] User: ${currentUserId}`);
+    console.log(`========================================`);
+
+    if (!section) {
+      console.error(`❌ [LoadMore] Section parameter missing!`);
+      return res.status(400).json({ message: "Section is required" });
     }
 
     const me = await User.findById(currentUserId).select(
-      "location interests lookingFor subscription potentialMatches gender birthday dna likedUsers dislikedUsers superLikedUsers"
-    );
+      "location lookingFor dna birthday interests gender likedUsers dislikedUsers matches blockedUsers"
+    ).lean();
 
     if (!me) return res.status(404).json({ message: "User not found" });
 
-    const userPlan = me.subscription?.plan || "free";
-    const visibilityLimit = getVisibilityThreshold(userPlan);
-    const soulmatePerms = getSoulmatePermissions(userPlan);
-    
-    // ✅ Performance Fix: Cache populated matches to avoid double populate
-    let populatedMatches = null;
-    
-    // --- Helper: Process Users (parallel Redis get + parallel compute for missing) ---
-    const processUsersList = async (usersList) => {
-        if (!usersList.length) return [];
-        const currentId = currentUserId.toString();
-        const list = usersList.map((u) => (u.toObject ? u.toObject() : { ...u }));
+    // Get exclusion history from Redis
+    const historyKey = `explore:history:${currentUserId}:${section}`;
+    const seenIdsSet = await redisClient.sMembers(historyKey);
+    const seenIds = [...seenIdsSet, currentUserId.toString()];
 
-        // Batch: get all scores (use existing or Redis) in parallel
-        const scorePromises = list.map((userObj) => {
-            const existing = typeof userObj.matchScore === "number" ? userObj.matchScore : null;
-            if (existing !== null) return Promise.resolve(existing);
-            const targetId = userObj._id?.toString?.() || userObj._id;
-            return getCompatibilityScore(currentId, targetId);
-        });
-        const scoresFromRedis = await Promise.all(scorePromises);
-
-        // For any still missing, compute and set in parallel
-        const toCompute = list
-            .map((userObj, listIndex) => ({
-                userObj,
-                listIndex,
-                score: scoresFromRedis[listIndex],
-            }))
-            .filter(({ score }) => score === null || score === undefined);
-
-        if (toCompute.length > 0) {
-            const computed = await Promise.all(
-                toCompute.map(async ({ userObj, listIndex }) => {
-                    const s = calculateCompatibility(me, userObj);
-                    const targetId = userObj._id?.toString?.() || userObj._id;
-                    setCompatibilityScore(currentId, targetId, s).catch(() => {});
-                    return { listIndex, score: s };
-                })
-            );
-            computed.forEach(({ listIndex, score }) => {
-                scoresFromRedis[listIndex] = score;
-            });
-        }
-
-        const finalScores = list.map((_, i) =>
-            typeof list[i].matchScore === "number" ? list[i].matchScore : (scoresFromRedis[i] ?? 50)
-        );
-
-        return list.map((userObj, i) => {
-            const score = finalScores[i];
-            const isLocked = score > visibilityLimit;
-            return {
-                _id: userObj._id,
-                name: userObj.name,
-                avatar: userObj.avatar,
-                birthday: userObj.birthday,
-                location: userObj.location,
-                matchScore: score,
-                isVerified: userObj.isVerified,
-                isLocked,
-                dna: isLocked ? null : calculateUserDNA(userObj),
-                bio: userObj.bio,
-                interests: userObj.interests,
-            };
-        });
+    // Build section-specific query
+    let query = {
+      _id: { $nin: seenIds },
+      "location.country": me.location?.country,
+      dna: { $exists: true, $ne: null }
     };
 
-    // --- MODE 1: Cached Lists (Soulmates, Interests) ---
-    if (category === "soulmates" || category === "interests") {
-      
-      if (category === "soulmates" && soulmatePerms.isLocked) {
-        return res.status(403).json({ message: "Upgrade required to view Soulmates." });
-      }
-
-      // ✅ Performance Fix: Populate once and reuse
-      if (!populatedMatches) {
-        await me.populate({
-          path: "potentialMatches.user",
-          select: "name avatar bio interests location birthday subscription gender createdAt isVerified dna",
-        });
-        populatedMatches = me.potentialMatches;
-      }
-
-      let cachedUsers = populatedMatches
-        .filter((m) => m.user) // Filter out deleted users
-        .map((m) => ({ ...m.user.toObject(), matchScore: m.matchScore }));
-
-      if (category === "soulmates") {
-        cachedUsers = cachedUsers.filter((u) => u.matchScore >= 80);
-      } else if (category === "interests") {
-        cachedUsers = cachedUsers.filter((u) =>
-          u.interests.some((i) => me.interests.includes(i))
-        );
-      }
-
-      cachedUsers.sort((a, b) => b.matchScore - a.matchScore);
-
-      // Pagination in memory
-      const totalUsers = cachedUsers.length;
-      const totalPages = Math.ceil(totalUsers / limitNum);
-      const startIndex = (pageNum - 1) * limitNum;
-      const slicedUsers = cachedUsers.slice(startIndex, startIndex + limitNum);
-
-      const finalUsers = await processUsersList(slicedUsers);
-
-      const result = {
-        mode: "cached_list",
-        userPlan,
-        users: finalUsers,
-        pagination: { currentPage: pageNum, totalPages, totalUsers },
-      };
-      
-      // ✅ Performance Fix: Cache the result
-      await setMatchesCache(currentUserId, `explore_${cacheKey}_${pageNum}`, result, 300); // 5 minutes
-      
-      return res.status(200).json(result);
+    if (me.lookingFor) {
+      query.gender = me.lookingFor;
     }
 
-    // --- MODE 2: Redis pool (new/country) or Live DB (nearby) ---
-    else if (["new", "nearby", "country"].includes(category)) {
-      const excludeIds = [
-        currentUserId?.toString?.() || currentUserId,
-        ...(me.likedUsers || []).map((id) => id.toString()),
-        ...(me.dislikedUsers || []).map((id) => id.toString()),
-        ...(me.superLikedUsers || []).map((id) => id.toString()),
-      ];
-
-      let finalUsers;
-      let totalUsers;
-      let totalPages;
-      const POOL_MAX_ESTIMATE = 500;
-
-      // ✅ Use Redis pool for "new" and "country" (same country, score-ranked)
-      if ((category === "new" || category === "country") && me.location?.country) {
-        const offset = (pageNum - 1) * limitNum;
-        const poolCandidates = await getFromPotentialPoolPaginated(
-          currentUserId,
-          limitNum,
-          excludeIds,
-          offset
-        );
-
-        if (poolCandidates.length > 0) {
-          const userIds = poolCandidates.map((c) => c.userId);
-          const userDocs = await User.find({ _id: { $in: userIds } })
-            .select("name avatar bio interests location birthday subscription gender createdAt isVerified dna")
-            .lean();
-          const byId = new Map(userDocs.map((u) => [u._id.toString(), u]));
-          const candidatesWithScore = poolCandidates.map((c) => {
-            const doc = byId.get(c.userId);
-            return doc ? { ...doc, matchScore: c.score } : null;
-          }).filter(Boolean);
-          finalUsers = await processUsersList(candidatesWithScore);
-          if (category === "new") {
-            finalUsers.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          } else {
-            finalUsers.sort((a, b) => b.matchScore - a.matchScore);
-          }
-          totalUsers = POOL_MAX_ESTIMATE;
-          totalPages = Math.ceil(POOL_MAX_ESTIMATE / limitNum);
-        }
-      }
-
-      // Fallback to DB: nearby (city filter) or when pool empty
-      if (!finalUsers) {
-        let dbQuery = {
-          _id: { $nin: excludeIds },
-          "location.country": me.location?.country || "",
-        };
-        if (me.lookingFor) dbQuery.gender = me.lookingFor;
-        if (category === "nearby" && me.location?.city) {
-          dbQuery["location.city"] = {
-            $regex: new RegExp(`^${escapeRegex(me.location.city)}$`, "i"),
-          };
-        }
-        const sortOption = { createdAt: -1 };
-        totalUsers = await User.countDocuments(dbQuery);
-        totalPages = Math.ceil(totalUsers / limitNum);
-        const candidates = await User.find(dbQuery)
-          .select("name avatar bio interests location birthday subscription gender createdAt isVerified dna")
-          .sort(sortOption)
-          .skip((pageNum - 1) * limitNum)
-          .limit(limitNum)
-          .lean();
-        finalUsers = await processUsersList(candidates);
-        if (category !== "new") {
-          finalUsers.sort((a, b) => b.matchScore - a.matchScore);
-        }
-      }
-
-      const result = {
-        mode: "live_list",
-        userPlan,
-        users: finalUsers,
-        pagination: { currentPage: pageNum, totalPages, totalUsers: totalUsers ?? 0 },
-      };
-      await setMatchesCache(currentUserId, `explore_${cacheKey}_${pageNum}`, result, 300);
-      return res.status(200).json(result);
+    // Section-specific filters
+    if (section === "nearYou" && me.location?.city) {
+      query["location.city"] = me.location.city;
+    } else if (section === "freshFaces") {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      query.createdAt = { $gte: thirtyDaysAgo };
     }
 
-    // --- MODE 3: Dashboard Overview ---
-    else {
-      // ✅ Performance Fix: Reuse populated matches if already populated
-      if (!populatedMatches) {
-        await me.populate({
-          path: "potentialMatches.user",
-          select: "name avatar bio interests location birthday subscription gender createdAt isVerified dna",
-        });
-        populatedMatches = me.potentialMatches;
-      }
+    console.log(`[LoadMore] Query:`, JSON.stringify(query));
+    console.log(`[LoadMore] Fetching ${LIMIT} users (skip: ${(page - 1) * LIMIT})...`);
 
-      let allMatches = populatedMatches
-        .filter((m) => m.user)
-        .map((m) => {
-          const userObj = m.user.toObject();
-          const finalScore = (m.matchScore > 0) ? m.matchScore : calculateCompatibility(me, userObj);
-          return { ...userObj, matchScore: finalScore };
-        });
+    // Fetch 150 users
+    const users = await User.find(query)
+      .select("name avatar bio location birthday gender interests dna isVerified createdAt questionsbycategoriesResults")
+      .limit(LIMIT)
+      .skip((page - 1) * LIMIT)
+      .lean();
 
-      // Fallback if cache is empty
-      if (allMatches.length < 5) {
-        const fallbackUsers = await User.find({
-          _id: { $ne: currentUserId },
-          "location.country": me.location.country,
-        })
-          .limit(20)
-          .select("name avatar bio interests location birthday subscription gender isVerified dna")
-          .lean();
-        
-        const freshMatches = fallbackUsers.map((u) => ({
-          ...u,
-          matchScore: calculateCompatibility(me, u),
-        }));
-        
-        allMatches = [...allMatches, ...freshMatches];
-      }
+    console.log(`✅ [LoadMore] Fetched ${users.length} users from DB`);
 
-      // Grouping
-      const soulmatePool = allMatches.filter((u) => u.matchScore >= 80).sort((a, b) => b.matchScore - a.matchScore);
-      const generalPool = allMatches;
 
-      // Apply Limits
-      let finalSoulmates = [];
-      if (!soulmatePerms.isLocked) {
-        finalSoulmates = soulmatePerms.limit === Infinity
-            ? shuffleArray([...soulmatePool]).slice(0, 10)
-            : soulmatePool.slice(0, soulmatePerms.limit);
-      }
+    // Calculate scores
+    const scoredUsers = users.map(u => ({
+      ...u,
+      matchScore: calculateCompatibility(me, u)
+    }));
 
-      // Fetch nearby users separately (same logic as category=nearby)
-      let nearbyUsers = [];
-      if (me.location?.city) {
-        const nearbyQuery = {
-          _id: { $ne: currentUserId },
-          "location.country": me.location.country,
-          "location.city": {
-            $regex: new RegExp(`^${escapeRegex(me.location.city)}$`, "i"),
-          },
-        };
-        
-        if (me.lookingFor) {
-          nearbyQuery.gender = me.lookingFor;
-        }
-        
-        const nearbyCandidates = await User.find(nearbyQuery)
-          .select("name avatar bio interests location birthday subscription gender createdAt isVerified dna")
-          .limit(20)
-          .lean();
-        
-        nearbyUsers = nearbyCandidates.map((u) => ({
-          ...u,
-          matchScore: calculateCompatibility(me, u),
-        }));
-        nearbyUsers.sort((a, b) => b.matchScore - a.matchScore);
-      }
-
-      const [
-        soulmatesList,
-        freshFacesList,
-        cityMatchesList,
-        interestMatchesList,
-        countryMatchesList,
-      ] = await Promise.all([
-        processUsersList(finalSoulmates),
-        processUsersList(shuffleArray([...generalPool]).slice(0, 10)),
-        processUsersList(nearbyUsers.slice(0, 20)),
-        processUsersList(
-          shuffleArray(
-            generalPool.filter((u) =>
-              u.interests.some((i) => me.interests.includes(i))
-            )
-          ).slice(0, 10)
-        ),
-        processUsersList(shuffleArray([...generalPool]).slice(0, 10)),
-      ]);
-      const sections = {
-        soulmates: soulmatesList,
-        freshFaces: freshFacesList,
-        cityMatches: cityMatchesList,
-        interestMatches: interestMatchesList,
-        countryMatches: countryMatchesList,
-      };
-
-      const result = {
-        userPlan,
-        mode: "overview",
-        sections,
-      };
-      
-      // ✅ Performance Fix: Cache the result
-      await setMatchesCache(currentUserId, `explore_${cacheKey}_${pageNum}`, result, 300); // 5 minutes
-      
-      return res.status(200).json(result);
+    // Apply section-specific sorting/filtering
+    let filteredUsers = scoredUsers;
+    if (section === "compatibilityVibes") {
+      filteredUsers = scoredUsers.filter(u => u.matchScore >= 70 && u.matchScore < 90);
+    } else if (section === "theSoulmates") {
+      filteredUsers = scoredUsers.filter(u => u.matchScore >= 90);
     }
+
+    // Sort
+    if (section === "freshFaces") {
+      filteredUsers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    } else {
+      filteredUsers.sort((a, b) => b.matchScore - a.matchScore);
+    }
+
+    // Add to history
+    const userIds = filteredUsers.map(u => u._id.toString());
+    if (userIds.length > 0) {
+      await redisClient.sAdd(historyKey, userIds);
+      await redisClient.expire(historyKey, 24 * 60 * 60); // 24h TTL
+    }
+
+    console.log(`✅ [LoadMore] Returning ${filteredUsers.length} users (hasMore: ${users.length === LIMIT})`);
+    console.log(`========================================\n`);
+
+    return res.status(200).json({
+      users: filteredUsers,
+      hasMore: users.length === LIMIT,
+      currentPage: page,
+      section
+    });
+
   } catch (err) {
-    console.error("Explore Error:", err);
-    // ✅ Security Fix: Don't expose error details
-    const errorMessage = process.env.NODE_ENV === 'production' 
-      ? "Server error. Please try again later." 
-      : err.message;
-    res.status(500).json({ message: errorMessage });
+    console.error(`\n❌ [LoadMore] FATAL ERROR:`);
+    console.error(err);
+    console.error(`========================================\n`);
+    res.status(500).json({ message: "Failed to load more users." });
   }
 };
 
@@ -434,4 +311,70 @@ export const getUserDetails = async (req, res) => {
       : err.message;
     res.status(500).json({ message: errorMessage });
   }
+};
+
+// ✅ NEW: Explore Refill Endpoint
+export const refillExploreSection = async (req, res) => {
+    try {
+        const { section } = req.body; // e.g., "nearby", "fresh_faces", "soulmates", "common", "new", "country"
+        const currentUserId = req.user.userId;
+
+        if (!section) {
+            return res.status(400).json({ message: "Section is required" });
+        }
+
+        console.log(`[Explore] Refill requested for section: ${section} by ${currentUserId}`);
+
+        const me = await User.findById(currentUserId).select(
+            "location interests lookingFor subscription potentialMatches matches likedUsers dislikedUsers"
+        );
+
+        if (!me) return res.status(404).json({ message: "User not found" });
+
+        // Call Worker Logic (Fetch 50 new candidates)
+        const newMatches = await findMatchesForSection(me, section, 50);
+
+        if (!newMatches || newMatches.length === 0) {
+            return res.status(200).json({
+                success: true,
+                section,
+                count: 0,
+                message: "No new matches found for this section.",
+                users: []
+            });
+        }
+
+        // Fetch Full Details for Frontend
+        const candidateIds = newMatches.map(m => m.user);
+        const candidates = await User.find({ _id: { $in: candidateIds } })
+            .select("name avatar bio interests location birthday subscription gender createdAt isVerified dna")
+            .lean();
+
+        // Merge scores & Format
+        const finalResults = candidates.map(c => {
+            const match = newMatches.find(m => m.user.toString() === c._id.toString());
+            return {
+                ...c,
+                matchScore: match ? match.matchScore : 0
+            };
+        });
+
+        // Sort based on section logic or score
+        if (section === "new" || section === "fresh_faces") {
+             finalResults.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        } else {
+             finalResults.sort((a, b) => b.matchScore - a.matchScore);
+        }
+
+        return res.status(200).json({
+            success: true,
+            section,
+            count: finalResults.length,
+            users: finalResults
+        });
+
+    } catch (err) {
+        console.error("Explore Refill Error:", err);
+        res.status(500).json({ message: "Refill failed." });
+    }
 };

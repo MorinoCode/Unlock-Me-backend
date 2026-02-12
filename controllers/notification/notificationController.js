@@ -4,6 +4,38 @@ import { getMatchesCache, setMatchesCache, invalidateMatchesCache } from "../../
 const NOTIFICATIONS_CACHE_TTL = 120; // 2 min
 
 /**
+ * ایجاد نوتیفیکیشن جدید (Internal Use)
+ */
+export const createNotification = async ({ receiverId, senderId, type, title, message, link, metadata = {} }) => {
+  try {
+    const notification = await Notification.create({
+      receiverId,
+      senderId,
+      type,
+      title,
+      message,
+      link,
+      metadata,
+      isRead: false
+    });
+
+    // Invalidate cache
+    await invalidateMatchesCache(receiverId, "notifications").catch(() => {});
+
+    // Note: Socket emission should be handled by the caller or a separate event bus if needed, 
+    // but usually this function is called from within other controllers.
+    // If we want real-time, we might need to import io or use an event emitter.
+    // For now, just DB creation is what was requested to fix the error.
+    
+    return notification;
+  } catch (error) {
+    console.error("Error creating notification:", error);
+    // Don't throw, just log. We don't want to break the main flow.
+    return null; 
+  }
+};
+
+/**
  * دریافت لیست نوتیفیکیشن‌های کاربر از دیتابیس
  * GET /api/notifications
  */

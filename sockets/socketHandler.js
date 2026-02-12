@@ -2,121 +2,35 @@ import BlindSession from "../models/BlindSession.js";
 import BlindQuestion from "../models/BlindQuestion.js";
 import Conversation from "../models/Conversation.js";
 import mongoose from "mongoose"; // ✅ Critical Fix: For transactions
+import redisClient from "../config/redis.js"; // ✅ New: For Redis Queue
 
-let blindQueue = [];
-// ✅ Fix 4: Lock mechanism for race condition prevention
-let queueLock = false;
-const acquireLock = () => {
-  if (queueLock) return false;
-  queueLock = true;
-  return true;
-};
-const releaseLock = () => {
-  queueLock = false;
-};
+import { addToQueue } from "../utils/blindDateService.js";
 
-/**
- * Returns a short reason why user1 and user2 don't match (or "MATCH").
- * Used for debug logging when testing blind date.
- */
-function getMatchReason(user1, user2) {
-  const id1 = String(user1.userId);
-  const id2 = String(user2.userId);
-  if (id1 === id2) return "same_user";
+// ✅ No more local blindQueue array or local locks.
+// Redis sharding and atomic updates are handled in blindDateService.
 
-  const c1 = (user1.criteria.location?.country ?? "").trim().toLowerCase();
-  const c2 = (user2.criteria.location?.country ?? "").trim().toLowerCase();
-  const countryMatch =
-    !c1 || !c2 || c1 === "unknown" || c2 === "unknown" || c1 === c2;
-  if (!countryMatch)
-    return `country_mismatch(${c1 || "empty"} vs ${c2 || "empty"})`;
 
-  const u1Gender =
-    (user1.criteria.gender ?? "").trim().toLowerCase() || "other";
-  const u1Looking = (user1.criteria.lookingFor ?? "").trim().toLowerCase();
-  const u2Gender =
-    (user2.criteria.gender ?? "").trim().toLowerCase() || "other";
-  const u2Looking = (user2.criteria.lookingFor ?? "").trim().toLowerCase();
 
-  if (!u1Looking) return "user1_lookingFor_empty";
-  if (!u2Looking) return "user2_lookingFor_empty";
-
-  const match1 = u1Looking === u2Gender;
-  const match2 = u2Looking === u1Gender;
-  if (!match1)
-    return `gender_mismatch: user1 lookingFor=${u1Looking} vs user2 gender=${u2Gender}`;
-  if (!match2)
-    return `gender_mismatch: user2 lookingFor=${u2Looking} vs user1 gender=${u1Gender}`;
-
-  return "MATCH";
-}
-
-/**
- * Match two users for Blind Date.
- * App only has Male, Female, Other (no "All").
- * - Different users (userId comparison as string)
- * - Country: same country, or either missing/empty → allow
- * - Gender: each user's lookingFor must equal the other's gender (Male/Female/Other)
- */
-const findMatch = (user1) => {
-  const id1 = String(user1.userId);
-  return blindQueue.find((user2) => {
-    const id2 = String(user2.userId);
-    if (id1 === id2) return false;
-
-    const c1 = (user1.criteria.location?.country ?? "").trim().toLowerCase();
-    const c2 = (user2.criteria.location?.country ?? "").trim().toLowerCase();
-    const countryMatch =
-      !c1 || !c2 || c1 === "unknown" || c2 === "unknown" || c1 === c2;
-    if (!countryMatch) return false;
-
-    const u1Gender =
-      (user1.criteria.gender ?? "").trim().toLowerCase() || "other";
-    const u1Looking = (user1.criteria.lookingFor ?? "").trim().toLowerCase();
-    const u2Gender =
-      (user2.criteria.gender ?? "").trim().toLowerCase() || "other";
-    const u2Looking = (user2.criteria.lookingFor ?? "").trim().toLowerCase();
-
-    if (!u1Looking || !u2Looking) return false;
-    const match1 = u1Looking === u2Gender;
-    const match2 = u2Looking === u1Gender;
-
-    return match1 && match2;
-  });
-};
-
-// ✅ Performance Fix: Cleanup mechanism for blindQueue
-const cleanupBlindQueue = (io) => {
-  blindQueue = blindQueue.filter((u) => {
-    const socket = io.sockets.sockets.get(u.socketId);
-    return socket && socket.connected;
-  });
-};
-
-// Run cleanup every 10 minutes
-let cleanupInterval = null;
-export const startBlindQueueCleanup = (io) => {
-  if (cleanupInterval) return; // Already started
-
-  cleanupInterval = setInterval(() => {
-    cleanupBlindQueue(io);
-    console.log(`🧹 Cleaned blind queue. Current size: ${blindQueue.length}`);
-  }, 10 * 60 * 1000); // 10 minutes
-};
 
 export const handleSocketConnection = (io, socket, userSocketMap) => {
   const userId = socket.handshake.query.userId;
-
-  // ✅ Performance Fix: Start cleanup on first connection
-  if (!cleanupInterval) {
-    startBlindQueueCleanup(io);
-  }
 
   if (userId && userId !== "undefined") {
     socket.userId = userId;
     socket.join(userId);
     userSocketMap.set(userId, socket.id);
   }
+
+
+  // Handle join_room event (for userId room joining)
+  socket.on("join_room", (userId) => {
+    if (!userId) return;
+    const roomName = String(userId);
+    socket.userId = roomName;
+    socket.join(roomName);
+    userSocketMap.set(roomName, socket.id);
+    console.log(`[Socket] User ${userId} joined room: ${roomName}, socket ID: ${socket.id}`);
+  });
 
   socket.on("join_blind_queue", async (data) => {
     const currentUserId = socket.userId || data.userId;
@@ -125,183 +39,55 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
       return;
     }
 
-    // ✅ Fix 4: Acquire lock to prevent race condition
-    if (!acquireLock()) {
-      socket.emit("error", { message: "Queue is busy, please try again" });
-      return;
-    }
-
     try {
       const normalizedUserId = String(currentUserId);
-      // Ensure this socket is in its userId room so it receives match_found (frontend may not send userId in handshake)
       socket.userId = normalizedUserId;
       socket.join(normalizedUserId);
 
-      const currentUser = {
-        socketId: socket.id,
-        userId: normalizedUserId,
-        criteria: data.criteria || {},
-      };
+      // ✅ Track user country for disconnect cleanup
+      socket.userCountry = data.criteria?.location?.country || "World";
 
-      const crit = currentUser.criteria;
-      const logCriteria = {
-        gender: crit.gender ?? "(empty)",
-        lookingFor: crit.lookingFor ?? "(empty)",
-        country: crit.location?.country ?? "(empty)",
-      };
-      console.log(
-        "[Blind Queue] User joined:",
-        normalizedUserId,
-        "| criteria:",
-        JSON.stringify(logCriteria)
-      );
+      console.log(`[Blind Queue] User ${normalizedUserId} joining Redis-sharded queue (Country: ${socket.userCountry})`);
 
-      // ✅ Fix 4: Check if user already in queue (double-check with lock)
-      const exists = blindQueue.find(
-        (u) => String(u.userId) === normalizedUserId || u.socketId === socket.id
-      );
-      if (exists) {
-        releaseLock();
-        socket.emit("queue_status", { status: "already_in_queue" });
-        return;
-      }
+      // ✅ Use Enterprise Standard Service
+      const result = await addToQueue(normalizedUserId, data.criteria);
 
-      if (blindQueue.length > 0) {
-        console.log(
-          "[Blind Queue]",
-          blindQueue.length,
-          "user(s) in queue. Checking match for:",
-          normalizedUserId
-        );
-        blindQueue.forEach((u, i) => {
-          const c = u.criteria || {};
-          const reason = getMatchReason(currentUser, u);
-          console.log(
-            `  [Blind Queue] vs queue[${i}] userId=${String(u.userId)} gender=${
-              c.gender ?? "?"
-            } lookingFor=${c.lookingFor ?? "?"} country=${
-              c.location?.country ?? "?"
-            } => ${reason}`
-          );
+      if (result.status === "matched") {
+        const { session } = result;
+        const payload = JSON.parse(JSON.stringify(session));
+
+        console.log(`[Blind Queue] ✅ MATCH FOUND via Redis: ${session.participants[0].name} <-> ${session.participants[1].name}`);
+
+        // Notify both participants in their dedicated rooms
+        session.participants.forEach(p => {
+            io.to(p._id.toString()).emit("match_found", payload);
         });
-      }
 
-      const match = findMatch(currentUser);
-
-      if (match) {
-        const matchUserId = String(match.userId);
-        console.log(
-          "[Blind Queue] MATCH:",
-          normalizedUserId,
-          "<->",
-          matchUserId
-        );
-        // ✅ Fix 4: Remove both users atomically (compare as string)
-        blindQueue = blindQueue.filter(
-          (u) =>
-            String(u.userId) !== matchUserId &&
-            String(u.userId) !== normalizedUserId
-        );
-
-        try {
-          const questionsStage1 = await BlindQuestion.aggregate([
-            { $match: { stage: 1 } },
-            { $sample: { size: 5 } },
-          ]);
-
-          if (!questionsStage1 || questionsStage1.length === 0) {
-            throw new Error("No questions found for stage 1");
-          }
-
-          const formattedQuestions = questionsStage1.map((q) => ({
-            questionId: q._id,
-            u1Answer: null,
-            u2Answer: null,
-          }));
-
-          const newSession = new BlindSession({
-            participants: [normalizedUserId, matchUserId],
-            status: "instructions",
-            currentStage: 1,
-            questions: formattedQuestions,
-            startTime: new Date(),
-          });
-
-          await newSession.save();
-
-          const populatedSession = await BlindSession.findById(newSession._id)
-            .populate("questions.questionId")
-            .populate("participants", "name avatar")
-            .lean();
-
-          if (!populatedSession) {
-            throw new Error("Failed to populate session");
-          }
-
-          // Ensure JSON-serializable payload for socket (ObjectId/Date → string)
-          let payload;
-          try {
-            payload = JSON.parse(JSON.stringify(populatedSession));
-          } catch (e) {
-            console.error("[Blind Queue] Payload serialize error:", e);
-            throw e;
-          }
-
-          const currentSocketId = socket.id;
-          const matchSocketId = match.socketId;
-          const matchSocketExists = matchSocketId
-            ? !!io.sockets.sockets.get(matchSocketId)
-            : false;
-          console.log(
-            "[Blind Queue] Emitting match_found to socketIds:",
-            currentSocketId,
-            matchSocketId,
-            "| match socket still connected:",
-            matchSocketExists
-          );
-
-          try {
-            io.to(currentSocketId).emit("match_found", payload);
-            if (matchSocketId)
-              io.to(matchSocketId).emit("match_found", payload);
-            io.to(normalizedUserId).emit("match_found", payload);
-            io.to(matchUserId).emit("match_found", payload);
-          } catch (emitErr) {
-            console.error("[Blind Queue] Emit error:", emitErr);
-          }
-        } catch (err) {
-          // ✅ Fix 5: Proper error handling - notify both users by socket.id
-          console.error("Error creating blind session:", err);
-          socket.emit("error", {
-            message: "Failed to create blind date session. Please try again.",
-            code: "SESSION_CREATION_FAILED",
-          });
-          if (match.socketId) {
-            io.to(match.socketId).emit("error", {
-              message: "Failed to create blind date session. Please try again.",
-              code: "SESSION_CREATION_FAILED",
-            });
-          }
-          // Put users back in queue
-          blindQueue.push(currentUser);
-          blindQueue.push({ ...match, userId: matchUserId });
-        }
-      } else {
-        blindQueue.push(currentUser);
-        console.log(
-          "[Blind Queue] No match. User added to queue. Queue size:",
-          blindQueue.length
-        );
+      } else if (result.status === "waiting") {
         socket.emit("queue_status", { status: "waiting_for_match" });
+      } else if (result.error) {
+        socket.emit("error", { message: result.error });
       }
-    } finally {
-      // ✅ Fix 4: Always release lock
-      releaseLock();
+    } catch (err) {
+      console.error("[Blind Queue] Join Error:", err);
+      socket.emit("error", { message: "Failed to join queue" });
     }
   });
 
-  socket.on("leave_blind_queue", () => {
-    blindQueue = blindQueue.filter((u) => u.socketId !== socket.id);
+  socket.on("leave_blind_queue", async () => {
+    // Migrated to Redis-safe cleanup (handled on disconnect or explicit leave)
+    const country = socket.userCountry || "World";
+    const QUEUE_KEY = `blind_date:queue:${country.trim().toLowerCase()}`;
+    
+    const rawQueue = await redisClient.lRange(QUEUE_KEY, 0, -1);
+    for (const item of rawQueue) {
+        const u = JSON.parse(item);
+        if (u.userId.toString() === socket.userId?.toString()) {
+            await redisClient.lRem(QUEUE_KEY, 1, item);
+            break;
+        }
+    }
+    console.log(`[Blind Queue] User ${socket.userId} left queue`);
   });
 
   socket.on("confirm_instructions", async ({ sessionId }) => {
@@ -333,16 +119,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
       );
     } catch (err) {
       console.error(err);
-    }
-  });
-
-  socket.on("join_room", (id) => {
-    if (id == null) return;
-    const roomId = typeof id === "string" ? id : id?.toString?.() ?? String(id);
-    if (!socket.userId) {
-      socket.userId = roomId;
-      socket.join(roomId);
-      userSocketMap.set(roomId, socket.id);
     }
   });
 
@@ -548,20 +324,55 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
     }
   });
 
-  socket.on("disconnect", () => {
-    // ✅ Fix 9: Better cleanup on disconnect
+  socket.on("disconnect", async () => {
     if (socket.userId) {
-      // Remove from blind queue
-      blindQueue = blindQueue.filter(
-        (u) => u.socketId !== socket.id && u.userId !== socket.userId
-      );
-      // Remove from user socket map
+      // 1. Remove from Redis Blind Queue (Sharded)
+      const country = socket.userCountry || "World";
+      const QUEUE_KEY = `blind_date:queue:${country.trim().toLowerCase()}`;
+      
+      try {
+          const rawQueue = await redisClient.lRange(QUEUE_KEY, 0, -1);
+          for (const item of rawQueue) {
+              const u = JSON.parse(item);
+              if (u.userId.toString() === socket.userId?.toString()) {
+                  await redisClient.lRem(QUEUE_KEY, 1, item);
+                  console.log(`[Socket] 🗑️ User ${socket.userId} removed from Redis ${country} queue on disconnect`);
+                  break;
+              }
+          }
+      } catch (err) {
+          console.error("[Socket] Disconnect Cleanup Error:", err);
+      }
+
+      // 2. Identify and Notify/Cancel Active Blind Sessions
+      try {
+          const activeSession = await BlindSession.findOne({
+              participants: socket.userId,
+              status: { $nin: ["completed", "cancelled"] }
+          });
+
+          if (activeSession) {
+              activeSession.status = "cancelled";
+              await activeSession.save();
+              
+              // Notify the other participant
+              const partnerId = activeSession.participants.find(p => p.toString() !== socket.userId);
+              if (partnerId) {
+                  io.to(partnerId.toString()).emit("session_cancelled", { 
+                      reason: "Partner disconnected",
+                      sessionId: activeSession._id
+                  });
+              }
+              console.log(`[Socket] 🛑 Active Blind Session ${activeSession._id} cancelled due to disconnect`);
+          }
+      } catch (err) {
+          console.error("[Socket] Session Cleanup Error:", err);
+      }
+
       userSocketMap.delete(socket.userId);
-      // Leave socket room
-      socket.leave(socket.userId);
-    } else {
-      // Even if userId is not set, remove by socketId
-      blindQueue = blindQueue.filter((u) => u.socketId !== socket.id);
+      const roomName = String(socket.userId);
+      socket.leave(roomName);
+      console.log(`[Socket] Room ${roomName} left by user ${socket.userId}`);
     }
     console.log(`👋 User disconnected: ${socket.userId || socket.id}`);
   });

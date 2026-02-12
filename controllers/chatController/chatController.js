@@ -38,17 +38,25 @@ export const sendMessage = async (req, res) => {
       ? sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} })
       : "";
     const sender = await User.findById(senderId).select(
-      "usage subscription likedUsers likedBy"
+      "usage subscription likedUsers likedBy blockedUsers blockedBy"
     );
+
+    // ✅ Block check: prevent messaging blocked users
+    if (sender.blockedUsers?.some(id => id.toString() === receiverId) ||
+        sender.blockedBy?.some(id => id.toString() === receiverId)) {
+      return res.status(403).json({ error: "Cannot send message to this user" });
+    }
 
     // --- Daily Reset Logic ---
     const now = new Date();
     const lastReset = sender.usage?.lastResetDate
       ? new Date(sender.usage.lastResetDate)
       : new Date(0);
+    // ✅ Bug Fix #16: Added year check for daily reset
     const isNextDay =
-      now.getDate() !== lastReset.getDate() ||
-      now.getMonth() !== lastReset.getMonth();
+      now.getFullYear() !== lastReset.getFullYear() ||
+      now.getMonth() !== lastReset.getMonth() ||
+      now.getDate() !== lastReset.getDate();
 
     if (isNextDay) {
       if (!sender.usage) sender.usage = {};
@@ -177,19 +185,29 @@ export const sendMessage = async (req, res) => {
       }
     }
 
-    // --- 3. Create/Update Conversation ---
+    // --- 3. Create or Update Conversation ---
+    const initialStatus = isMatch ? "active" : "pending";
+    const initialMatchType = isMatch ? "swipe" : "direct";
+    const finalUnlocked = isUnlocked; 
+    const finalMatchType = isUnlocked && !isMatch ? (conversation?.matchType || "blind_date") : initialMatchType;
+
     if (!conversation) {
       conversation = new Conversation({
         participants: [senderId, receiverId],
-        status: isMatch ? "active" : "pending",
         initiator: senderId,
-        matchType: isMatch ? "swipe" : "direct",
-        isUnlocked: false, // Default is locked unless coming from special controllers
+        matchType: finalMatchType,
+        isUnlocked: finalUnlocked,
+        status: initialStatus,
+        hiddenBy: []
       });
+      // We'll save it later after setting lastMessage
     } else {
-      // If they matched later via swipe, activate it
-      if (isMatch && conversation.status === "pending") {
-        conversation.status = "active";
+      // Update existing conversation properties
+      if (isMatch) conversation.status = "active";
+      if (finalUnlocked) conversation.isUnlocked = true;
+      // If it became a match or was recently unlocked via other means
+      if (conversation.status === "active" && !conversation.matchType) {
+        conversation.matchType = finalMatchType;
       }
     }
 
@@ -264,8 +282,11 @@ export const getConversations = async (req, res) => {
       query.status = "pending";
       query.initiator = { $ne: myIdForQuery };
     } else {
-      // تب «Active Chats»: فقط مکالمات active (pending ها فقط در Requests نمایش داده می‌شوند)
-      query.status = "active";
+      // تب «Active Chats»: مکالمات active + پیام‌های ارسالی خودمان که منتظر تایید هستند
+      query.$or = [
+        { status: "active" },
+        { status: "pending", initiator: myIdForQuery },
+      ];
     }
 
     const conversations = await Conversation.find(query)
@@ -273,8 +294,23 @@ export const getConversations = async (req, res) => {
       .sort({ updatedAt: -1 })
       .lean();
 
+    // ✅ Bug Fix #18: Filter out conversations with blocked users
+    const me = await User.findById(myId).select("blockedUsers blockedBy").lean();
+    const blockedSet = new Set([
+      ...(me?.blockedUsers || []).map(id => id.toString()),
+      ...(me?.blockedBy || []).map(id => id.toString()),
+    ]);
+    const filteredConversations = blockedSet.size > 0
+      ? conversations.filter(conv => {
+          const otherParticipant = conv.participants?.find(
+            (p) => (p._id || p).toString() !== myId
+          );
+          return otherParticipant && !blockedSet.has((otherParticipant._id || otherParticipant).toString());
+        })
+      : conversations;
+
     // ✅ Performance Fix: Batch count unread messages instead of N+1 queries
-    const conversationIds = conversations.map((c) => c._id);
+    const conversationIds = filteredConversations.map((c) => c._id);
 
     // Single aggregation query to get all unread counts
     const unreadCounts =
@@ -304,7 +340,7 @@ export const getConversations = async (req, res) => {
     });
 
     // Map conversations with unread counts
-    const conversationsWithUnread = conversations.map((conv) => ({
+    const conversationsWithUnread = filteredConversations.map((conv) => ({
       ...conv,
       unreadCount: unreadMap[conv._id.toString()] || 0,
     }));
@@ -436,13 +472,20 @@ export const editMessage = async (req, res) => {
   try {
     const { id } = req.params;
     const { text } = req.body;
+    const userId = req.user.userId || req.user.id;
     const io = req.app.get("io");
 
-    const updatedMessage = await Message.findByIdAndUpdate(
-      id,
-      { text, isEdited: true },
-      { new: true }
-    );
+    // ✅ Security Fix: Check message ownership before editing
+    const message = await Message.findById(id);
+    if (!message) return res.status(404).json({ error: "Message not found" });
+    if (message.sender.toString() !== userId.toString()) {
+      return res.status(403).json({ error: "You can only edit your own messages" });
+    }
+
+    message.text = text;
+    message.isEdited = true;
+    await message.save();
+    const updatedMessage = message;
 
     io.to(updatedMessage.receiver.toString())
       .to(updatedMessage.sender.toString())
@@ -465,12 +508,19 @@ export const editMessage = async (req, res) => {
 export const deleteMessage = async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.user.userId || req.user.id;
     const io = req.app.get("io");
 
     const message = await Message.findById(id);
     if (!message) {
       return res.status(404).json({ error: "Message not found" });
     }
+
+    // ✅ Security Fix: Check message ownership before deleting
+    if (message.sender.toString() !== userId.toString()) {
+      return res.status(403).json({ error: "You can only delete your own messages" });
+    }
+
     message.isDeleted = true;
     message.text = "This message was deleted";
     await message.save();
@@ -500,7 +550,8 @@ export const reactToMessage = async (req, res) => {
     const message = await Message.findById(id);
     if (!message) return res.status(404).json({ message: "Message not found" });
 
-    const existingReaction = message.reactions.find((r) => r.userId === userId);
+    // ✅ Bug Fix: Use .toString() for ObjectId comparison
+    const existingReaction = message.reactions.find((r) => r.userId?.toString() === userId.toString());
 
     if (existingReaction) {
       existingReaction.emoji = emoji;
@@ -581,7 +632,22 @@ export const rejectRequest = async (req, res) => {
     const userId = req.user.userId || req.user.id;
 
     const conversation = await Conversation.findById(conversationId).lean();
-    const initiatorId = conversation?.initiator?.toString?.();
+    if (!conversation) {
+      return res.status(404).json({ error: "Conversation not found" });
+    }
+
+    // ✅ Security Fix: Only a participant (non-initiator) can reject
+    const isParticipant = conversation.participants.some(
+      (p) => p.toString() === userId.toString()
+    );
+    if (!isParticipant) {
+      return res.status(403).json({ error: "Not a participant" });
+    }
+    if (conversation.initiator?.toString() === userId.toString()) {
+      return res.status(403).json({ error: "You cannot reject your own request" });
+    }
+
+    const initiatorId = conversation.initiator?.toString?.();
 
     await Conversation.findByIdAndDelete(conversationId);
     await Message.deleteMany({ conversationId });

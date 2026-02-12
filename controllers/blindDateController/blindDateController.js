@@ -46,7 +46,8 @@ export const getBlindDateStatus = async (req, res) => {
       : null;
     const now = new Date();
 
-    if (lastDate && !isSameDay(now, lastDate)) {
+    // ✅ Smart Reset: Reset count if no lastDate OR lastDate is not today
+    if (!lastDate || !isSameDay(now, lastDate)) {
       countToday = 0;
     }
 
@@ -110,7 +111,8 @@ export const recordBlindDateUsage = async (req, res) => {
 
     let newCount = (user.usage?.blindDatesCount || 0) + 1;
 
-    if (lastDate && !isSameDay(now, lastDate)) {
+    // ✅ Smart Reset: Reset count to 1 if no lastDate OR lastDate is not today
+    if (!lastDate || !isSameDay(now, lastDate)) {
       newCount = 1;
     }
 

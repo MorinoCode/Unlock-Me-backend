@@ -57,7 +57,7 @@ const userSchema = new mongoose.Schema(
     subscription: {
       plan: {
         type: String,
-        enum: ["free", "gold", "platinum", "diamond"], // ✅ Added Diamond plan
+        enum: ["free", "gold", "platinum", "diamond"],
         default: "free",
       },
       expiresAt: { type: Date, default: null },
@@ -66,6 +66,11 @@ const userSchema = new mongoose.Schema(
         enum: ["active", "expired", "canceled"],
         default: "active",
       },
+      stripeSubscriptionId: { type: String, default: null },
+      stripeCustomerId: { type: String, default: null },
+      isTrial: { type: Boolean, default: false },          // ✅ Free trial flag
+      trialExpiresAt: { type: Date, default: null },       // ✅ When the 7-day trial ends
+      startedAt: { type: Date, default: Date.now },        // ✅ When the current plan/trial started
     },
 
     usage: {
@@ -85,6 +90,9 @@ const userSchema = new mongoose.Schema(
     superLikedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     // ✅ Bug Fix: Explicit matches array for mutual matches
     matches: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    // ✅ Block User Feature
+    blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    blockedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
     interests: [String],
     avatar: { type: String, default: "" },
@@ -161,6 +169,8 @@ userSchema.index({ "subscription.plan": 1, "subscription.status": 1 }); // For s
 userSchema.index({ likedUsers: 1 }); // For match queries
 userSchema.index({ likedBy: 1 }); // For match queries
 userSchema.index({ dislikedUsers: 1 }); // For swipe: "users who disliked me" exclusion
+userSchema.index({ blockedUsers: 1 }); // For block feature
+userSchema.index({ blockedBy: 1 }); // For block feature
 userSchema.index({ createdAt: -1 }); // For sorting by newest
 
 // ✅ Swipe fallback query: country + gender + dna (compound for getCandidatesFromDB / getSwipeCards)

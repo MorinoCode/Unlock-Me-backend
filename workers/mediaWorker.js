@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
 import User from "../models/User.js";
 import cloudinary from "../config/cloudinary.js";
-import redisClient from "../config/redis.js";
+import redisClient, { bullMQConnection } from "../config/redis.js";
 import { invalidateUserCache, invalidateMatchesCache } from "../utils/cacheHelper.js";
 import { invalidateUserCaches } from "../utils/redisMatchHelper.js";
 import { dispatchExploreSync } from "../utils/workerDispatcher.js";
@@ -98,10 +98,7 @@ const workerHandler = async (job) => {
 };
 
 const mediaWorker = new Worker("media-queue", workerHandler, {
-  connection: {
-    host: process.env.REDIS_HOST || "127.0.0.1",
-    port: process.env.REDIS_PORT || 6379,
-  },
+  connection: bullMQConnection,
   concurrency: 10,
 });
 

@@ -1,5 +1,6 @@
 import { Worker } from "bullmq";
 import GoDate from "../models/GoDate.js";
+import { bullMQConnection } from "../config/redis.js";
 import cloudinary from "../config/cloudinary.js";
 import dotenv from "dotenv";
 
@@ -46,10 +47,7 @@ const workerHandler = async (job) => {
 
 // Initialize Worker
 const goDateWorker = new Worker("godate-queue", workerHandler, {
-    connection: {
-        host: process.env.REDIS_HOST || "127.0.0.1",
-        port: process.env.REDIS_PORT || 6379,
-    },
+    connection: bullMQConnection,
     concurrency: 2
 });
 

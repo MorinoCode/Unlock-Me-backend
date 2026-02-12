@@ -3,51 +3,55 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// ✅ Fix 1: Check if REDIS_URL exists
-if (!process.env.REDIS_URL) {
-  console.warn(
-    "⚠️ REDIS_URL not found in environment variables. Redis features will be disabled."
-  );
-}
-
-const redisClient = process.env.REDIS_URL
-  ? createClient({
+// ✅ Shared connection config for BullMQ & redis client
+export const redisConnectionConfig = process.env.REDIS_URL
+  ? {
       url: process.env.REDIS_URL,
       socket: {
-        connectTimeout: 50000, 
-        keepAlive: 5000,
+        tls: process.env.REDIS_URL.startsWith("rediss://"),
+        connectTimeout: 50000,
+        keepAlive: 10000,
         reconnectStrategy: (retries) => {
-            if (retries > 20) {
-                console.error("Redis: Max retries exceeded. Giving up.");
-                return new Error("Max retries exceeded");
-            }
-            return Math.min(retries * 50, 2000);
+          if (retries > 30) {
+            console.error("❌ Redis: Max retries exceeded. Giving up.");
+            return new Error("Max retries exceeded");
+          }
+          return Math.min(retries * 100, 3000);
         }
       }
-    })
-  : null;
+    }
+  : {
+      socket: {
+        host: process.env.REDIS_HOST || "127.0.0.1",
+        port: process.env.REDIS_PORT || 6379,
+      }
+    };
+
+const redisClient = createClient(redisConnectionConfig);
+
+// ✅ BullMQ connection (URL string is easiest for ioredis/BullMQ)
+export const bullMQConnection = process.env.REDIS_URL || {
+  host: process.env.REDIS_HOST || "127.0.0.1",
+  port: parseInt(process.env.REDIS_PORT) || 6379,
+};
 
 if (redisClient) {
   redisClient.on("error", (err) => {
     console.error("❌ Redis Client Error:", err.message);
-    // Don't crash the server, just log the error
   });
 
   redisClient.on("connect", () => {
-    console.log("✅ Connected to Redis Cloud successfully! 🚀");
+    console.log("✅ Connected to Redis successfully! 🚀");
   });
 
-  // ✅ Fix 1: Proper error handling for connection
   (async () => {
     try {
-      if (redisClient && !redisClient.isOpen) {
+      if (!redisClient.isOpen) {
         await redisClient.connect();
       }
     } catch (error) {
       console.error("❌ Failed to connect to Redis:", error.message);
-      console.warn(
-        "⚠️ Server will continue without Redis. Blind Date features may not work."
-      );
+      console.warn("⚠️ Server will continue without Redis features.");
     }
   })();
 }

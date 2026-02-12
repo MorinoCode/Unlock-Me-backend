@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import redisClient from "../config/redis.js";
+import redisClient, { bullMQConnection } from "../config/redis.js";
 import User from "../models/User.js";
 import { generateAnalysisData } from "./exploreMatchWorker.js";
 import { generateFeedForUser } from "./swipeFeedWorker.js";
@@ -70,10 +70,7 @@ const workerHandler = async (job) => {
 
 // Initialize Worker
 const analysisWorker = new Worker("analysis-queue", workerHandler, {
-    connection: {
-        host: process.env.REDIS_HOST || "127.0.0.1",
-        port: process.env.REDIS_PORT || 6379,
-    },
+    connection: bullMQConnection,
     concurrency: 5 // Process 5 jobs at once (Scalable!)
 });
 

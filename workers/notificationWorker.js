@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import Notification from "../models/notification.js";
-import redisClient from "../config/redis.js";
+import redisClient, { bullMQConnection } from "../config/redis.js";
 import { invalidateMatchesCache } from "../utils/cacheHelper.js";
 
 /**
@@ -42,10 +42,7 @@ const workerHandler = async (job) => {
 };
 
 const notificationWorker = new Worker("notification-queue", workerHandler, {
-  connection: {
-    host: process.env.REDIS_HOST || "127.0.0.1",
-    port: process.env.REDIS_PORT || 6379,
-  },
+  connection: bullMQConnection,
   concurrency: 20, // Process 20 notifications at once (Scalable!)
 });
 

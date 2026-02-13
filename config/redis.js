@@ -61,15 +61,38 @@ export const redisConnectionConfig = rawUrl
       }
     };
 
-const redisClient = createClient(redisConnectionConfig);
+// ✅ Parse URL for BullMQ (ioredis compatibility)
+let parsedBullMQConnection = null;
+if (rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    parsedBullMQConnection = {
+      host: url.hostname,
+      port: parseInt(url.port) || (url.protocol === "rediss:" ? 6380 : 6379),
+      password: url.password,
+      username: url.username !== "default" ? url.username : undefined, // ioredis/BullMQ handles default username
+      tls: url.protocol === "rediss:" ? {} : undefined,
+      maxRetriesPerRequest: null, // Critical for BullMQ
+    };
+    console.log(`📡 [Redis] Parsed BullMQ Connection: ${parsedBullMQConnection.host}:${parsedBullMQConnection.port} (TLS: ${!!parsedBullMQConnection.tls})`);
+  } catch (err) {
+    console.error("❌ Failed to parse REDIS_URL for BullMQ:", err.message);
+    parsedBullMQConnection = rawUrl; // Fallback to raw string
+  }
+}
 
-// ✅ BullMQ connection (ioredis/BullMQ handles string URL or object)
-export const bullMQConnection = rawUrl || {
+// ✅ BullMQ connection (ioredis standard)
+export const bullMQConnection = parsedBullMQConnection || {
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: parseInt(process.env.REDIS_PORT) || 6379,
-  // Add TLS if port is 6380 (common for TLS)
+  maxRetriesPerRequest: null,
   ...(parseInt(process.env.REDIS_PORT) === 6380 && { tls: {} })
 };
+
+console.log("📦 [Redis] Final bullMQConnection host:", bullMQConnection.host ? (bullMQConnection.host.substring(0, 5) + "...") : "NOT SET");
+console.log("------------------------------\n");
+
+const redisClient = createClient(redisConnectionConfig);
 
 if (redisClient) {
   redisClient.on("error", (err) => {

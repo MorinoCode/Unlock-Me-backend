@@ -158,7 +158,23 @@ app.use(cors(corsOptions));
 // ==========================================
 // 2. SECURITY HEADERS & COMPRESSION
 // ==========================================
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
+        mediaSrc: ["'self'", "https://res.cloudinary.com"],
+        connectSrc: ["'self'", "https://res.cloudinary.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        objectSrc: ["'none'"],
+        upgradeInsecureRequests: [],
+      },
+    },
+  })
+);
 app.use(compression());
 
 // ✅ Security Fix: Better Rate Limiting

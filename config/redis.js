@@ -92,6 +92,8 @@ export const bullMQConnection = parsedBullMQConnection || {
 console.log("📦 [Redis] Final bullMQConnection host:", bullMQConnection.host ? (bullMQConnection.host.substring(0, 5) + "...") : "NOT SET");
 console.log("------------------------------\n");
 
+const redisClient = createClient(redisConnectionConfig);
+
 if (redisClient) {
   redisClient.on("error", (err) => {
     console.error("❌ Redis Client Error:", err.message);

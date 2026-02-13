@@ -3,15 +3,37 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const rawUrl = (process.env.REDIS_URL || process.env.REDIS_INTERNAL_URL || process.env.REDIS_EXTERNAL_URL || "").trim();
+// ✅ Aggressive Detection: Check all common names and clean the string
+const rawUrl = (
+  process.env.REDIS_URL || 
+  process.env.REDIS_URI || 
+  process.env.REDIS_INTERNAL_URL || 
+  process.env.REDIS_EXTERNAL_URL || 
+  process.env.REDIS_SERVICE_URL ||
+  ""
+).trim().replace(/^["'](.*)["']$/, '$1');
 
 console.log("\n--- [CRITICAL REDIS DEBUG] ---");
 console.log("Current NODE_ENV:", process.env.NODE_ENV);
 console.log("Detected URL (masked):", rawUrl ? (rawUrl.substring(0, 15) + "...") : "NONE");
+
+// Log all keys starting with REDIS (masked) to help find the correct one
+const envKeys = Object.keys(process.env);
+console.log("Available REDIS-related env keys:");
+envKeys.filter(k => k.toUpperCase().includes("REDIS")).forEach(k => {
+  const val = process.env[k];
+  console.log(`- ${k}: ${val ? (val.substring(0, 8) + "...") : "empty"}`);
+});
+
 if (!rawUrl) {
-  console.log("⚠️ WARNING: No REDIS_URL detected. Falling back to localhost/env-parts.");
-  console.log("REDIS_HOST:", process.env.REDIS_HOST);
-  console.log("REDIS_PORT:", process.env.REDIS_PORT);
+  if (process.env.NODE_ENV === "production") {
+    console.error("❌ CRITICAL ERROR: No Redis URL found in production environment!");
+    console.error("Please ensure REDIS_URL or REDIS_URI is set in Render Dashboard.");
+    // In production, we should arguably crash early to avoid silent failures
+    // throw new Error("Missing Redis configuration in production");
+  } else {
+    console.log("⚠️ INFO: Falling back to localhost/env-parts for development.");
+  }
 }
 console.log("------------------------------\n");
 
@@ -41,10 +63,12 @@ export const redisConnectionConfig = rawUrl
 
 const redisClient = createClient(redisConnectionConfig);
 
-// ✅ BullMQ connection
+// ✅ BullMQ connection (ioredis/BullMQ handles string URL or object)
 export const bullMQConnection = rawUrl || {
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: parseInt(process.env.REDIS_PORT) || 6379,
+  // Add TLS if port is 6380 (common for TLS)
+  ...(parseInt(process.env.REDIS_PORT) === 6380 && { tls: {} })
 };
 
 if (redisClient) {

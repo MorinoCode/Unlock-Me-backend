@@ -34,6 +34,12 @@ async function processWithConcurrency(items, concurrency, processor) {
 
 // Cron Job: Run every 6 hours to refresh feeds
 cron.schedule("0 */6 * * *", async () => {
+  // Check Feature Flag
+  if (process.env.ENABLE_UNLOCK_API !== "true") {
+    console.log("⏰ Swipe Feed Job: Feature ENABLE_UNLOCK_API is disabled. Skipping...");
+    return;
+  }
+
   if (isRunning) {
     console.log("⏰ Swipe Feed Job: Already running, skipping...");
     return;
@@ -101,6 +107,10 @@ async function processAllUsers() {
 
 // Core Function: Generate feed for a single user (Global Scale Architecture)
 export async function generateFeedForUser(currentUser) {
+  // Check Feature Flag
+  if (process.env.ENABLE_UNLOCK_API !== "true") {
+    return false;
+  }
   try {
     const userId = currentUser._id;
     const CANDIDATE_POOL_SIZE = 500; // Fetch pool size

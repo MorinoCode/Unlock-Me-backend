@@ -58,7 +58,9 @@ import { Worker } from "worker_threads";
 
 // ✅ Start Explore Worker (Background Thread)
 if (process.env.NODE_ENV !== 'test') {
-  new Worker(new URL("./workers/exploreWorker.js", import.meta.url));
+  new Worker(new URL("./workers/exploreWorker.js", import.meta.url), {
+    env: process.env
+  });
 }
 
 // ✅ اتصال به دیتابیس قبل از هر کاری

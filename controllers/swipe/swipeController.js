@@ -1,21 +1,21 @@
 import User from "../../models/User.js";
-import mongoose from "mongoose";
+// import mongoose from "mongoose";
 import {
   calculateCompatibility,
-  calculateUserDNA,
-  generateMatchInsights,
+//   calculateUserDNA,
+//   generateMatchInsights,
 } from "../../utils/matchUtils.js";
-import { emitNotification } from "../../utils/notificationHelper.js";
+// import { emitNotification } from "../../utils/notificationHelper.js";
 import {
   getSwipeLimit,
-  getSuperLikeLimit,
-  getVisibilityThreshold,
+  // getSuperLikeLimit,
+  // getVisibilityThreshold,
 } from "../../utils/subscriptionRules.js";
 // ✅ Performance Fix: Import cache helpers
 import {
-  getMatchesCache,
+  // getMatchesCache,
   setMatchesCache,
-  invalidateUserCache,
+  // invalidateUserCache,
 } from "../../utils/cacheHelper.js";
 import redisClient from "../../config/redis.js";
 import { addToSwipeFeedQueue } from "../../queues/swipeFeedQueue.js";
@@ -108,8 +108,8 @@ export const getSwipeCards = async (req, res) => {
            const isLocked = !isManuallyUnlocked && (compatibility > visibilityThreshold);
         */
 
-        const dnaProfile = calculateUserDNA(user);
-        const insights = generateMatchInsights(me, user);
+        // const dnaProfile = calculateUserDNA(user);
+        // const insights = generateMatchInsights(me, user);
 
         const commonInterest = user.interests?.find((i) =>
           me.interests?.includes(i)
@@ -213,7 +213,7 @@ export const handleSwipeAction = async (req, res) => {
     // --- LIMITS (simplified for speed) ---
     const userPlan = currentUserData.subscription?.plan || "free";
     const swipeLimit = getSwipeLimit(userPlan);
-    const superLikeLimit = getSuperLikeLimit(userPlan);
+    // const superLikeLimit = getSuperLikeLimit(userPlan);
     
     // Check usage simply
     // Ideally this logic moves to Redis for strict high-scale enforcement

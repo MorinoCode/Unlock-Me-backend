@@ -1,6 +1,6 @@
 import express from "express";
 import { protect } from "../middleware/auth.js";
-import { checkFeatureFlag } from "../middleware/featureFlagMiddleware.js";
+// import { checkFeatureFlag } from "../middleware/featureFlagMiddleware.js";
 // ✅ Scalability Optimization: Use optimized controller with Redis
 import {
   getSwipeCards,

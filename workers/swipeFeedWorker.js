@@ -2,8 +2,8 @@ import { Worker } from "bullmq";
 import User from "../models/User.js";
 import redisClient, { bullMQConnection } from "../config/redis.js";
 
-const FEED_SIZE = 100;
-const REFILL_THRESHOLD = 20;
+// const FEED_SIZE = 100;
+// const REFILL_THRESHOLD = 20;
 
 // Core Logic: Generate Feed (Same as before but optimized)
 export async function generateFeedForUser(currentUser) {
@@ -79,7 +79,7 @@ const swipeFeedWorker = new Worker("swipe-feed", swipeFeedProcessor, {
     },
 });
 
-swipeFeedWorker.on("completed", (job) => {
+swipeFeedWorker.on("completed", () => {
     // console.log(`[SwipeFeedWorker] Job ${job.id} done`);
 });
 

@@ -20,10 +20,6 @@ export const addToSwipeFeedQueue = async (userId, priority = false) => {
       "generate-feed",
       { userId },
       {
-        priority: priority ? 1 : 2, // 1 is higher priority? BullMQ uses 1 as highest? No, usually lower number = higher priority or vice versa. 
-        // BullMQ: "Jobs with higher priority will be processed before jobs with lower priority." 
-        // Wait, standard is 1 (high) to MAX_INT (low)? 
-        // Actually BullMQ docs say: "Ranges from 1 (highest priority) to 2097152 (lowest priority)."
         priority: priority ? 1 : 10,
         jobId: `feed-${userId}-${Date.now()}` // Prevent duplicates if needed, or allow
       }

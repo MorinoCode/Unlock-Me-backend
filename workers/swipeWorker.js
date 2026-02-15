@@ -9,12 +9,6 @@ import { invalidateUserCaches } from "../utils/redisMatchHelper.js";
 import { bullMQConnection } from "../config/redis.js";
 
 const swipeWorkerHandler = async (job) => {
-    // Check Feature Flag
-    if (process.env.ENABLE_UNLOCK_API !== "true") {
-        console.log(`[SwipeWorker] 🛑 Feature ENABLE_UNLOCK_API is disabled. Skipping job.`);
-        return { success: false, message: "Feature disabled" };
-    }
-
     const { userId, targetUserId, action, isMatch } = job.data;
     console.log(`[SwipeWorker] ⚙️ Processing ${action} from ${userId} to ${targetUserId}`);
 

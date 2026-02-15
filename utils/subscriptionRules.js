@@ -265,3 +265,20 @@ export const getGoDateApplyConfig = (plan) => {
       return { maxPerDay: 3, period: "day" };
   }
 };
+// ---------------------------------------------
+// 11. Daily Unlock Keys (Swipe Page)
+// ---------------------------------------------
+export const getDailyKeyLimit = (plan) => {
+  const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
+  switch (normalizedPlan) {
+    case PLANS.DIAMOND:
+      return Infinity; // ✅ Unlimited
+    case PLANS.PLATINUM:
+      return 90;
+    case PLANS.GOLD:
+      return 50;
+    case PLANS.FREE:
+    default:
+      return 10;
+  }
+};

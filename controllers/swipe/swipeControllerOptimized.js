@@ -16,10 +16,9 @@ import {
   setMatchesCache,
 } from "../../utils/cacheHelper.js";
 import {
-  getTopCandidates,
   addExcludedUser,
-  getFromPotentialPool,
 } from "../../utils/redisMatchHelper.js";
+import redisClient from "../../config/redis.js";
 
 
 /**
@@ -87,37 +86,54 @@ export const getSwipeCards = async (req, res) => {
       if (freshCached.length > 0) {
         return res.status(200).json(freshCached);
       }
-      // If cache is empty after filter, proceed to fetch new cards...
     }
 
-    // ✅ Step 4: Try Redis ranking pool first (pre-computed top candidates)
-    const genderFilter = me.lookingFor || null;
-    let candidateIds = await getFromPotentialPool(
-      currentUserId,
-      20,
-      excludeIds
-    );
+    // ✅ Step 4: Try Redis Feed (Worker Generated)
+    // The worker populates 'swipe:feed:{userId}' with candidate IDs
+    const feedKey = `swipe:feed:${currentUserId}`;
+    let candidateIds = [];
 
-    // ✅ Step 5: If Redis pool is empty or insufficient, try ranking pool
-    if (candidateIds.length < 20) {
-      const rankingCandidates = await getTopCandidates(
-        currentUserId,
-        myCountry,
-        genderFilter,
-        20 - candidateIds.length,
-        excludeIds
-      );
-      candidateIds = [...candidateIds, ...rankingCandidates];
+    // Try to pop 20 items from the feed
+    // Note: lPop with count is available in Redis 6.2+. If older, we might need loop or lRange+lTrim.
+    // Assuming modern Redis (Render usually provides 6.x or 7.x)
+    try {
+        // We use a simple loop or lRange for broader compatibility if needed, 
+        // but let's try to get a batch.
+        // For safety/compatibility, let's use lRange + lTrim (atomic-ish enough for this use case)
+        // OR just pop one by one in a loop parallel? 
+        // Better: Use lPop count if available, catch error if not.
+        // Node Redis v4 supports .lPop(key, count).
+        const feedItems = await redisClient.lPop(feedKey, 20); // Returns array of strings or null
+        if (feedItems && Array.isArray(feedItems)) {
+            candidateIds = feedItems.map(id => ({ _id: id })); 
+            if (process.env.NODE_ENV !== "production") {
+                console.log(`[SwipeController] 🎯 Popped ${candidateIds.length} users from Redis Feed`);
+            }
+        } else if (typeof feedItems === 'string') {
+             // Single item popped (if count param not supported/passed, tho v4 should handle it)
+             candidateIds.push({ _id: feedItems });
+        }
+    } catch (err) {
+        console.warn("[SwipeController] Redis LPOP failed (maybe empty or old version), falling back.", err.message);
     }
 
-    // ✅ Step 6: If still not enough, fallback to DB with smart selection
+    // ✅ Step 5: Fallback to DB if Redis Feed is empty/insufficient
     if (candidateIds.length < 20) {
+      const needed = 20 - candidateIds.length;
+      if (process.env.NODE_ENV !== "production") {
+          console.log(`[SwipeController] ⚠️ Redis Feed low/empty. Fetching ${needed} from DB (Fallback)`);
+      }
+      
       const dbCandidates = await getCandidatesFromDB(
         me,
-        excludeIds,
-        20 - candidateIds.length
+        [...excludeIds, ...candidateIds.map(c => c._id.toString())], // Exclude what we already have
+        needed
       );
       candidateIds = [...candidateIds, ...dbCandidates];
+      
+      // Optional: Trigger worker to refill if it was empty? 
+      // The worker theoretically runs periodically, but we could trigger it here if critical.
+      // For now, let's rely on the scheduled worker or the one-off triggers.
     }
 
     // ✅ Step 7: Fetch full user data for selected candidates

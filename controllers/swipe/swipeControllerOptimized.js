@@ -16,10 +16,9 @@ import {
   setMatchesCache,
 } from "../../utils/cacheHelper.js";
 import {
-  getTopCandidates,
   addExcludedUser,
-  getFromPotentialPool,
 } from "../../utils/redisMatchHelper.js";
+import redisClient from "../../config/redis.js";
 
 
 /**

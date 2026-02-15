@@ -72,8 +72,8 @@ export async function generateAnalysisData(userId) {
       createdAt: 1
     };
 
-    console.log(`[AnalysisWorker] Step 2: Fetching candidates for 4 sections...`);
-    console.log(`[AnalysisWorker] Base Query:`, JSON.stringify(baseQuery));
+    console.log(`[AnalysisWorker] 🔍 Fetching candidates for all sections...`);
+    console.log(`   - Base Query: Country=${userCountry}, LookingFor=${currentUser.lookingFor || "Any"}`);
 
     // ✅ SEPARATE QUERIES FOR EACH SECTION (No overlap, better distribution)
     
@@ -83,11 +83,13 @@ export async function generateAnalysisData(userId) {
       "location.city": currentUser.location?.city
     };
     
+    console.log(`[AnalysisWorker] SECTION 1: Near You (City: ${currentUser.location?.city})...`);
     const nearYou = await User.aggregate([
       { $match: nearYouQuery },
       { $sample: { size: SECTION_SIZE } },
       { $project: projection }
     ]);
+    console.log(`   - Found: ${nearYou.length} users near you.`);
 
     // Exclude Near You users from other sections
     const nearYouIds = nearYou.map(u => u._id);
@@ -102,13 +104,15 @@ export async function generateAnalysisData(userId) {
       _id: { $nin: excludedWithNearYou },
       createdAt: { $gte: thirtyDaysAgo }
     };
-
+    
+    console.log(`[AnalysisWorker] SECTION 2: Fresh Faces (Since: ${thirtyDaysAgo.toISOString().split('T')[0]})...`);
     const freshFaces = await User.aggregate([
       { $match: freshFacesQuery },
       { $sort: { createdAt: -1 } },
       { $limit: SECTION_SIZE },
       { $project: projection }
     ]);
+    console.log(`   - Found: ${freshFaces.length} new users.`);
 
     // Exclude Fresh Faces from remaining sections
     const freshFacesIds = freshFaces.map(u => u._id);
@@ -120,12 +124,14 @@ export async function generateAnalysisData(userId) {
       _id: { $nin: excludedWithFresh },
       "location.city": { $ne: currentUser.location?.city }
     };
-
+    
+    console.log(`[AnalysisWorker] SECTION 3: Across the Country (Excluding City: ${currentUser.location?.city})...`);
     const acrossTheCountry = await User.aggregate([
       { $match: acrossCountryQuery },
       { $sample: { size: SECTION_SIZE } },
       { $project: projection }
     ]);
+    console.log(`   - Found: ${acrossTheCountry.length} users across the country.`);
 
     // Exclude Across Country from Compatibility Vibes
     const acrossCountryIds = acrossTheCountry.map(u => u._id);
@@ -136,18 +142,16 @@ export async function generateAnalysisData(userId) {
       ...baseQuery,
       _id: { $nin: excludedWithAcross }
     };
-
+    
+    console.log(`[AnalysisWorker] SECTION 4: Compatibility Vibes (Excluding previous)...`);
     const compatibilityVibes = await User.aggregate([
       { $match: compatibilityQuery },
       { $sample: { size: SECTION_SIZE } },
       { $project: projection }
     ]);
+    console.log(`   - Found: ${compatibilityVibes.length} random compatibility candidates.`);
 
-    console.log(`[AnalysisWorker] ✅ Fetched candidates for all sections`);
-    console.log(`  - nearYou: ${nearYou.length} users`);
-    console.log(`  - freshFaces: ${freshFaces.length} users`);
-    console.log(`  - acrossTheCountry: ${acrossTheCountry.length} users`);
-    console.log(`  - compatibilityVibes: ${compatibilityVibes.length} users`);
+    console.log(`[AnalysisWorker] ✅ All sections processed.`);
 
     // Generate 5 sections (4 with users, 1 null)
     const sections = {
@@ -158,7 +162,7 @@ export async function generateAnalysisData(userId) {
       acrossTheCountry
     };
 
-    console.log(`[AnalysisWorker] Step 3: Storing in Redis...`);
+    console.log(`[AnalysisWorker] 📦 Storing results in Redis (Key: analysis:sections:${userId})`);
     console.log(`[AnalysisWorker] Sections generated (4 SEPARATE QUERIES):`);
     console.log(`  - nearYou: ${sections.nearYou.length} users`);
     console.log(`  - freshFaces: ${sections.freshFaces.length} users`);
@@ -185,7 +189,7 @@ export async function generateAnalysisData(userId) {
     console.error(`\n❌ [AnalysisWorker] FATAL ERROR for ${userId}:`);
     console.error(error);
     console.error(`========================================\n`);
-    throw error;
+    return null; // Return null instead of throwing so calling worker can handle it gracefully
   }
 }
 

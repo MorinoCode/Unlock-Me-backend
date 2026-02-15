@@ -83,6 +83,16 @@ const setupRedisSubscriber = async () => {
             ready: true, 
             duration: event.duration 
           });
+        } else if (event.type === 'EXPLORE_COMPLETE') {
+          console.log(`🔔 [Socket] Notifying user ${event.userId}: Explore Complete`);
+          io.to(event.userId).emit("explore_complete", { 
+            success: true 
+          });
+        } else if (event.type === 'SWIPE_FEED_COMPLETE') {
+          console.log(`🔔 [Socket] Notifying user ${event.userId}: Swipe Feed Complete`);
+          io.to(event.userId).emit("swipe_feed_complete", { 
+            success: true 
+          });
         } else if (event.type === 'ANALYSIS_FAILED') {
           console.log(`🔔 [Socket] Notifying user ${event.userId}: Analysis Failed`);
           io.to(event.userId).emit("analysis_error", { 

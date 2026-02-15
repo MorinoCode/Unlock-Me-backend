@@ -13,35 +13,67 @@ const workerHandler = async (job) => {
     const startTime = Date.now();
 
     try {
-        // 1. Fetch User
-        const user = await User.findById(userId).select(
-            "location lookingFor likedUsers dislikedUsers superLikedUsers matches blockedUsers"
-        ).lean();
+        // 1. Fetch User (Full object for sub-workers)
+        const user = await User.findById(userId).lean();
 
-        if (!user) throw new Error("User not found");
-        if (!user.location?.country) throw new Error("User location missing");
+        if (!user) {
+            console.error(`[AnalysisWorker] ❌ Critical Error: User ${userId} not found in DB`);
+            throw new Error("User not found");
+        }
+        
+        console.log(`[AnalysisWorker] 👤 User Info: ${user.name} | Country: ${user.location?.country} | City: ${user.location?.city}`);
+        console.log(`[AnalysisWorker] 🔍 DEBUG USER OBJ:`, JSON.stringify(user, null, 2));
+
+        if (!user.location?.country) {
+            console.error(`[AnalysisWorker] ❌ Critical Error: User ${userId} is missing 'location.country'`);
+            throw new Error("User location missing");
+        }
 
         // 2. Run Heavy Logic
-        console.log(`[AnalysisWorker] Running calculations...`);
-        const [analysisResult, feedResult] = await Promise.all([
-            generateAnalysisData(userId),
-            generateFeedForUser(user)
-        ]);
+        console.log(`[AnalysisWorker] ⚙️ Running parallel workers (Explore + Swipe)...`);
+        
+        // Run them continuously but wait for both
+        const explorePromise = generateAnalysisData(userId).then(async (res) => {
+             if (res) {
+                 await redisClient.publish("job-events", JSON.stringify({ 
+                    type: 'EXPLORE_COMPLETE',
+                    userId, 
+                    success: true 
+                }));
+             }
+             return res;
+        });
+
+        const feedPromise = generateFeedForUser(user).then(async (res) => {
+            if (res) {
+                await redisClient.publish("job-events", JSON.stringify({ 
+                    type: 'SWIPE_FEED_COMPLETE',
+                    userId, 
+                    success: true 
+                }));
+            }
+            return res;
+        });
+
+        const [analysisResult, feedResult] = await Promise.all([explorePromise, feedPromise]);
+
+        console.log(`[AnalysisWorker] 📊 Results Summary for ${userId}:`);
+        console.log(`   - Explore Data: ${analysisResult ? "✅ SUCCESS (Object)" : "❌ FAILED (NULL)"}`);
+        console.log(`   - Swipe Feed: ${feedResult ? "✅ SUCCESS" : "⚠️ SKIPPED/DISABLED (False)"}`);
 
         const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-        console.log(`✅ [AnalysisWorker] Job completed in ${duration}s`);
+        console.log(`✅ [AnalysisWorker] Total execution time: ${duration}s`);
 
-        if (analysisResult && feedResult) {
-            // 3. Mark User Ready in Redis
+        if (analysisResult !== null) {
+            // ✅ Success (We prioritize Explore/Analysis Data. Feed is optional but tracked)
             await redisClient.set(`user:ready:${userId}`, "true", { EX: 3600 });
             
             // 4. Update MongoDB
             await User.findByIdAndUpdate(userId, { 
                 lastMatchCalculation: new Date()
-            }, { lean: true }); // optimize update
+            }, { lean: true }); 
 
-            // 5. Publish Event for Socket.IO (via server.js)
-            // We publish to a dedicated channel: 'job-events'
+            // 5. Publish Final Event
             const message = JSON.stringify({ 
                 type: 'ANALYSIS_COMPLETE',
                 userId, 
@@ -52,7 +84,7 @@ const workerHandler = async (job) => {
             
             return { success: true, duration };
         } else {
-            throw new Error("One or more workers failed to return data");
+            throw new Error("AnalysisWorker (Explore) failed to return data");
         }
 
     } catch (error) {
@@ -82,6 +114,9 @@ analysisWorker.on("failed", (job, err) => {
     console.error(`[AnalysisWorker] Job ${job.id} failed: ${err.message}`);
 });
 
+console.log("\n\n************************************************************");
+console.log("*   ✅ [AnalysisWorker] NEW VERSION LOADED! (Step 43)    *");
+console.log("************************************************************\n\n");
 console.log("✅ [AnalysisWorker] Worker Started & Listening...");
 
 // ✅ Crash Protection: Handle unexpected errors without exiting

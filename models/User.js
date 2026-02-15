@@ -75,6 +75,7 @@ const userSchema = new mongoose.Schema(
 
     usage: {
       swipesCount: { type: Number, default: 0 },
+      keysUsedToday: { type: Number, default: 0 }, // ✅ New: Track daily key usage
       superLikesCount: { type: Number, default: 0 },
       directMessagesCount: { type: Number, default: 0 },
       blindDatesCount: { type: Number, default: 0 },
@@ -93,6 +94,9 @@ const userSchema = new mongoose.Schema(
     // ✅ Block User Feature
     blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     blockedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    
+    // ✅ Unlock Feature Persistence
+    unlockedProfiles: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
     interests: [String],
     avatar: { type: String, default: "" },

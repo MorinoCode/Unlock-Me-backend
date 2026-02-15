@@ -9,6 +9,11 @@ export const triggerAnalysisWorkers = async (req, res) => {
     console.log(`[AnalysisPage] 🔧 QUEUEING WORKERS for user: ${userId}`);
     console.log(`========================================`);
 
+    // Debug: Fetch user to confirm data availability
+    const { default: User } = await import("../../models/User.js"); // Dynamic import to avoid circular dep if any
+    const userDebug = await User.findById(userId).lean();
+    console.log(`[AnalysisPage] 🔍 CONTROLLER DEBUG: User ${userId} Country: ${userDebug?.location?.country}`);
+
     // Add job to BullMQ queue
     await analysisQueue.add("analyze-user", { userId }, {
       removeOnComplete: true, // Auto-remove successful jobs

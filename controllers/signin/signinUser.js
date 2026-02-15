@@ -21,7 +21,7 @@ export const signinUser = async (req, res) => {
     const accessToken = jwt.sign(
       { userId: user._id, role: user.role, location: user.location, username: user.username, type: 'access' },
       process.env.JWT_SECRET,
-      { expiresIn: "1h" }
+      { expiresIn: "7d" }
     );
     
     const refreshToken = jwt.sign(
@@ -42,7 +42,7 @@ export const signinUser = async (req, res) => {
       secure: isProduction, 
       sameSite: "lax", 
       domain: isProduction ? ".unlock-me.app" : undefined, 
-      maxAge: 60 * 60 * 1000, // 1 hour
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
     
     res.cookie("unlock-me-refresh-token", refreshToken, {

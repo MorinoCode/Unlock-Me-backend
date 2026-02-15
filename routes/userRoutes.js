@@ -58,5 +58,9 @@ router.post("/block/:targetUserId", protect, blockUser);
 router.post("/unblock/:targetUserId", protect, unblockUser);
 router.get("/blocked", protect, getBlockedUsers);
 
+// ✅ Unlock Keys Feature
+import { getKeyStatus, unlockProfile } from "../controllers/user/userKeys.js";
+router.get("/keys/status", protect, getKeyStatus);
+router.post("/keys/unlock", protect, unlockProfile);
 
 export default router;

@@ -1,5 +1,5 @@
 /**
- * ✅ Scalability Optimization: Optimized Swipe Controller
+ * ✅ Scalability Optimization: Optimized unlock Controller
  * برای میلیون‌ها کاربر با استفاده از Redis
  */
 
@@ -8,7 +8,7 @@ import {
 } from "../../utils/matchUtils.js";
 import { emitNotification } from "../../utils/notificationHelper.js";
 import {
-  getSwipeLimit,
+  getunlockLimit,
   getSuperLikeLimit,
 } from "../../utils/subscriptionRules.js";
 import {
@@ -22,19 +22,19 @@ import redisClient from "../../config/redis.js";
 
 
 /**
- * ✅ Optimized: Get Swipe Cards with Redis
+ * ✅ Optimized: Get unlock Cards with Redis
  * Strategy:
  * 1. Check Redis cache first (5 minutes)
  * 2. Try Redis ranking pool (pre-computed top candidates)
  * 3. Fallback to DB with Redis compatibility scores
  */
-export const getSwipeCards = async (req, res) => {
+export const getunlockCards = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.userId;
 
     // ✅ Log: Confirm optimized controller is being used
     if (process.env.NODE_ENV !== "production") {
-      console.log("🚀 Using Optimized Swipe Controller with Redis");
+      console.log("🚀 Using Optimized unlock Controller with Redis");
     }
 
     // ✅ Step 1: Get user data FIRST (Required for smart cache filtering)
@@ -74,8 +74,8 @@ export const getSwipeCards = async (req, res) => {
     usersWhoDislikedMe.forEach((u) => excludeIds.push(u._id.toString()));
 
     // ✅ Step 3: Check Redis cache AND FILTER IT
-    // This prevents showing users that were JUST swiped but are still in cache
-    let cached = await getMatchesCache(currentUserId, "swipe");
+    // This prevents showing users that were JUST unlockd but are still in cache
+    let cached = await getMatchesCache(currentUserId, "unlock");
     if (cached) {
       // Filter out anyone in our fresh exclude list
       const freshCached = cached.filter(
@@ -89,8 +89,8 @@ export const getSwipeCards = async (req, res) => {
     }
 
     // ✅ Step 4: Try Redis Feed (Worker Generated)
-    // The worker populates 'swipe:feed:{userId}' with candidate IDs
-    const feedKey = `swipe:feed:${currentUserId}`;
+    // The worker populates 'unlock:feed:{userId}' with candidate IDs
+    const feedKey = `unlock:feed:${currentUserId}`;
     let candidateIds = [];
 
     // Try to pop 20 items from the feed
@@ -107,21 +107,21 @@ export const getSwipeCards = async (req, res) => {
         if (feedItems && Array.isArray(feedItems)) {
             candidateIds = feedItems.map(id => ({ _id: id })); 
             if (process.env.NODE_ENV !== "production") {
-                console.log(`[SwipeController] 🎯 Popped ${candidateIds.length} users from Redis Feed`);
+                console.log(`[unlockController] 🎯 Popped ${candidateIds.length} users from Redis Feed`);
             }
         } else if (typeof feedItems === 'string') {
              // Single item popped (if count param not supported/passed, tho v4 should handle it)
              candidateIds.push({ _id: feedItems });
         }
     } catch (err) {
-        console.warn("[SwipeController] Redis LPOP failed (maybe empty or old version), falling back.", err.message);
+        console.warn("[unlockController] Redis LPOP failed (maybe empty or old version), falling back.", err.message);
     }
 
     // ✅ Step 5: Fallback to DB if Redis Feed is empty/insufficient
     if (candidateIds.length < 20) {
       const needed = 20 - candidateIds.length;
       if (process.env.NODE_ENV !== "production") {
-          console.log(`[SwipeController] ⚠️ Redis Feed low/empty. Fetching ${needed} from DB (Fallback)`);
+          console.log(`[unlockController] ⚠️ Redis Feed low/empty. Fetching ${needed} from DB (Fallback)`);
       }
       
       const dbCandidates = await getCandidatesFromDB(
@@ -181,11 +181,11 @@ export const getSwipeCards = async (req, res) => {
     const finalCards = enrichedCards.filter((card) => card !== null);
 
     // ✅ Step 9: Cache results (5 minutes)
-    await setMatchesCache(currentUserId, "swipe", finalCards, 300);
+    await setMatchesCache(currentUserId, "unlock", finalCards, 300);
 
     res.status(200).json(finalCards);
   } catch (error) {
-    console.error("Get Swipe Cards Error:", error);
+    console.error("Get unlock Cards Error:", error);
     const errorMessage =
       process.env.NODE_ENV === "production"
         ? "Server error. Please try again later."
@@ -228,24 +228,24 @@ async function getCandidatesFromDB(me, excludeIds, limit) {
 
 
 /**
- * ✅ Optimized: Handle Swipe Action
+ * ✅ Optimized: Handle unlock Action
  * Updates Redis excluded list immediately
  */
-import { swipeActionQueue } from "../../config/queue.js";
+import { unlockActionQueue } from "../../config/queue.js";
 import { 
     addRedisLike, 
     checkRedisMatch, 
-    incrementSwipeCounter, 
-    getSwipeCounter 
+    incrementunlockCounter, 
+    getunlockCounter 
 } from "../../utils/redisMatchHelper.js";
 
 // ... (existing isSameDay helper) ...
 
 /**
- * ✅ High-Scale: Handle Swipe Action (Redis-First + BullMQ)
+ * ✅ High-Scale: Handle unlock Action (Redis-First + BullMQ)
  * Eliminates MongoDB transactions and write conflicts.
  */
-export const handleSwipeAction = async (req, res) => {
+export const handleunlockAction = async (req, res) => {
   try {
     const { targetUserId, action } = req.body;
     const currentUserId = req.user.userId;
@@ -264,15 +264,15 @@ export const handleSwipeAction = async (req, res) => {
 
     // 2. Phase 3: Check Limits using Redis Atomic Counters
     const userPlan = me.subscription?.plan || "free";
-    const swipeLimit = getSwipeLimit(userPlan);
+    const unlockLimit = getunlockLimit(userPlan);
     const superLikeLimit = getSuperLikeLimit(userPlan);
 
     // Get current counts from Redis (Fast)
-    const dailySwipes = await getSwipeCounter(currentUserId, "swipes");
-    const dailySuperLikes = await getSwipeCounter(currentUserId, "superlikes");
+    const dailyunlocks = await getunlockCounter(currentUserId, "unlocks");
+    const dailySuperLikes = await getunlockCounter(currentUserId, "superlikes");
 
-    if ((action === "right" || action === "left") && swipeLimit !== Infinity && dailySwipes >= swipeLimit) {
-         return res.status(403).json({ message: "Daily swipe limit reached.", errorLabel: "Limit Reached" });
+    if ((action === "right" || action === "left") && unlockLimit !== Infinity && dailyunlocks >= unlockLimit) {
+         return res.status(403).json({ message: "Daily unlock limit reached.", errorLabel: "Limit Reached" });
     }
     if (action === "up") {
          if (superLikeLimit !== Infinity && dailySuperLikes >= superLikeLimit) {
@@ -281,9 +281,9 @@ export const handleSwipeAction = async (req, res) => {
     }
 
     // 3. Increment Redis Counters (Atomic)
-    await incrementSwipeCounter(currentUserId, "swipes");
+    await incrementunlockCounter(currentUserId, "unlocks");
     if (action === "up") {
-        await incrementSwipeCounter(currentUserId, "superlikes");
+        await incrementunlockCounter(currentUserId, "superlikes");
     }
 
     // 4. Phase 1: Redis Pre-Match Logic (Likes/Superlikes Only)
@@ -297,7 +297,7 @@ export const handleSwipeAction = async (req, res) => {
     }
 
     // 5. Phase 2: Dispatch Job to BullMQ for MongoDB Persistence
-    await swipeActionQueue.add(`swipe-${currentUserId}-${targetUserId}`, {
+    await unlockActionQueue.add(`unlock-${currentUserId}-${targetUserId}`, {
         userId: currentUserId,
         targetUserId,
         action,
@@ -341,16 +341,16 @@ export const handleSwipeAction = async (req, res) => {
          matchDetails: isMatch ? {
              id: targetUserId,
              // Note: Name/Avatar will be populated by frontend or we can fetch targetUser here if needed.
-             // For performance, frontend usually has this in the SwipeCard prop already.
+             // For performance, frontend usually has this in the unlockCard prop already.
          } : null,
          updatedUsage: {
-             swipesCount: dailySwipes + 1,
+             unlocksCount: dailyunlocks + 1,
              superLikesCount: action === "up" ? dailySuperLikes + 1 : dailySuperLikes
          }
     });
 
   } catch (error) {
-    console.error("High-Scale Swipe Error:", error);
+    console.error("High-Scale unlock Error:", error);
     res.status(500).json({ message: "Interaction failed. Please try again." });
   }
 };

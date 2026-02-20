@@ -1,6 +1,6 @@
 import redisClient from "../../config/redis.js";
 
-// Check if user is ready (Analysis + Swipe workers completed)
+// Check if user is ready (Analysis + unlock workers completed)
 export const checkUserReady = async (req, res) => {
   try {
     const userId = req.user.userId;

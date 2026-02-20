@@ -8,7 +8,17 @@ const reportSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['technical', 'billing', 'user', 'content', 'other'],
+    enum: [
+      'harassment', 
+      'hate_speech', 
+      'fake_profile', 
+      'scam', 
+      'underage', 
+      'inappropriate_content', 
+      'technical', 
+      'billing', 
+      'other'
+    ],
     required: true
   },
   description: {

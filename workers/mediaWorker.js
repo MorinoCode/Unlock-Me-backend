@@ -27,18 +27,37 @@ const workerHandler = async (job) => {
       const uploadRes = await cloudinary.uploader.upload(avatarBase64, {
         folder: "unlock_me_avatars",
         transformation: [{ width: 500, height: 500, crop: "fill" }],
+        moderation: "aws_rekognition_ai_moderation", // ✅ AI Moderation
       });
+
+      // ✅ Check Moderation Result
+      if (uploadRes.moderation && uploadRes.moderation.length > 0) {
+        const modStatus = uploadRes.moderation[0].status;
+        if (modStatus === "rejected") {
+           console.warn(`[MediaWorker] ⚠️ Avatar rejected for user ${userId}`);
+           await cloudinary.uploader.destroy(uploadRes.public_id);
+           
+           // Notify Frontend
+           await redisClient.publish("job-events", JSON.stringify({
+             type: "MEDIA_REJECTED",
+             userId: userId.toString(),
+             mediaType: type,
+             reason: "Inappropriate content detected"
+           }));
+           return { success: false, reason: "Moderation rejected" }; // Stop here, don't update DB
+        }
+      }
+
       updateData.avatar = uploadRes.secure_url;
 
     } else if (type === "UPLOAD_VOICE") {
+      // Voice calls usually don't use image moderation, but we keep the flow
       const { voiceBase64 } = data;
-      // Delete old voice
       if (user.voiceIntro) {
         const publicId = user.voiceIntro.match(/\/upload\/(?:v\d+\/)?(.+)\.\w+$/)?.[1];
         if (publicId) await cloudinary.uploader.destroy(publicId, { resource_type: "video" }).catch(() => {});
       }
 
-      // Convert base64 to buffer
       const base64Data = voiceBase64.split('base64,')[1];
       const audioBuffer = Buffer.from(base64Data, 'base64');
 
@@ -53,20 +72,50 @@ const workerHandler = async (job) => {
       updateData.voiceIntro = uploadRes.secure_url;
 
     } else if (type === "UPLOAD_GALLERY") {
-      const { images } = data; // Array of mixed URLs and Base64
+      const { images } = data; 
       
-      const processedImages = await Promise.all(
-        images.map(async (img) => {
+      const processedImages = [];
+      const rejectedCount = 0;
+
+      for (const img of images) {
           if (img.startsWith("data:image")) {
             const uploadRes = await cloudinary.uploader.upload(img, {
               folder: "unlock_me_gallery",
-              transformation: [{ width: 800, crop: "limit" }]
+              transformation: [{ width: 800, crop: "limit" }],
+              moderation: "aws_rekognition_ai_moderation", // ✅ AI Moderation
             });
-            return uploadRes.secure_url;
+
+            // ✅ Check Moderation Result
+            let isRejected = false;
+            if (uploadRes.moderation && uploadRes.moderation.length > 0) {
+                if (uploadRes.moderation[0].status === "rejected") {
+                    console.warn(`[MediaWorker] ⚠️ Gallery image rejected for user ${userId}`);
+                    await cloudinary.uploader.destroy(uploadRes.public_id);
+                    isRejected = true;
+                }
+            }
+
+            if (!isRejected) {
+                processedImages.push(uploadRes.secure_url);
+            } else {
+                // If rejected, we just skip pushing it to processedImages
+            }
+          } else {
+            // Already a URL (existing image)
+            processedImages.push(img);
           }
-          return img;
-        })
-      );
+      }
+
+      // If any were rejected, notify user
+      if (processedImages.length < images.length) {
+          await redisClient.publish("job-events", JSON.stringify({
+             type: "MEDIA_REJECTED",
+             userId: userId.toString(),
+             mediaType: type,
+             reason: "One or more images were rejected due to inappropriate content"
+           }));
+      }
+      
       updateData.gallery = processedImages;
     }
 

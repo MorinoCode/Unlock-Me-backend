@@ -27,7 +27,7 @@ const godateQueue = new Queue("godate-queue", {
     defaultJobOptions,
 });
 
-const swipeActionQueue = new Queue("swipe-action-queue", {
+const unlockActionQueue = new Queue("unlock-action-queue", {
     connection: bullMQConnection,
     defaultJobOptions,
 });
@@ -47,7 +47,7 @@ const onboardingQueue = new Queue("onboarding-queue", {
   defaultJobOptions,
 });
 
-console.log("✅ [Queue] Analysis, Explore, GoDate, Swipe, Notification, Media & Onboarding Queues Initialized");
+console.log("✅ [Queue] Analysis, Explore, GoDate, unlock, Notification, Media & Onboarding Queues Initialized");
 
-export { analysisQueue, exploreQueue, godateQueue, swipeActionQueue, notificationQueue, mediaQueue, onboardingQueue };
+export { analysisQueue, exploreQueue, godateQueue, unlockActionQueue, notificationQueue, mediaQueue, onboardingQueue };
 

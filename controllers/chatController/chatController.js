@@ -187,7 +187,7 @@ export const sendMessage = async (req, res) => {
 
     // --- 3. Create or Update Conversation ---
     const initialStatus = isMatch ? "active" : "pending";
-    const initialMatchType = isMatch ? "swipe" : "direct";
+    const initialMatchType = isMatch ? "unlock" : "direct";
     const finalUnlocked = isUnlocked; 
     const finalMatchType = isUnlocked && !isMatch ? (conversation?.matchType || "blind_date") : initialMatchType;
 

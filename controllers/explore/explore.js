@@ -187,7 +187,7 @@ export const loadMoreSection = async (req, res) => {
 
     // Fetch 150 users
     const users = await User.find(query)
-      .select("name avatar bio location birthday gender interests dna isVerified createdAt questionsbycategoriesResults")
+      .select("name avatar bio location birthday gender interests dna isVerified verification createdAt questionsbycategoriesResults")
       .limit(LIMIT)
       .skip((page - 1) * LIMIT)
       .lean();
@@ -336,7 +336,7 @@ export const refillExploreSection = async (req, res) => {
         // Fetch Full Details for Frontend
         const candidateIds = newMatches.map(m => m.user);
         const candidates = await User.find({ _id: { $in: candidateIds } })
-            .select("name avatar bio interests location birthday subscription gender createdAt isVerified dna")
+            .select("name avatar bio interests location birthday subscription gender createdAt isVerified verification dna")
             .lean();
 
         // Merge scores & Format

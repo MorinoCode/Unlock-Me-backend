@@ -4,8 +4,7 @@
  */
 
 import User from "../../models/User.js";
-import {
-} from "../../utils/matchUtils.js";
+
 import { emitNotification } from "../../utils/notificationHelper.js";
 import {
   getunlockLimit,
@@ -142,7 +141,7 @@ export const getunlockCards = async (req, res) => {
       _id: { $in: candidateUserIds },
     })
       .select(
-        "name birthday avatar gallery bio gender location voiceIntro interests dna isVerified"
+        "name birthday avatar gallery bio gender location voiceIntro interests dna isVerified isLocked potentialMatches"
       )
       .lean();
 

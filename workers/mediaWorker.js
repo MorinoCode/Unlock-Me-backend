@@ -75,7 +75,7 @@ const workerHandler = async (job) => {
       const { images } = data; 
       
       const processedImages = [];
-      const rejectedCount = 0;
+      // rejectedCount tracking reserved for future moderation reporting
 
       for (const img of images) {
           if (img.startsWith("data:image")) {

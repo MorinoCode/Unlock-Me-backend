@@ -41,6 +41,17 @@ const userSchema = new mongoose.Schema(
 
     role: { type: String, default: "user" },
 
+    verification: {
+      status: { 
+        type: String, 
+        enum: ['unverified', 'pending', 'verified', 'rejected'], 
+        default: 'unverified' 
+      },
+      mediaUrl: { type: String, default: null }, 
+      publicId: { type: String, default: null }, // Useful for deleting from Cloudinary later
+      requestedAt: { type: Date, default: null }
+    },
+
     birthday: {
       day: String,
       month: String,
@@ -66,21 +77,24 @@ const userSchema = new mongoose.Schema(
         enum: ["active", "expired", "canceled"],
         default: "active",
       },
-      stripeSubscriptionId: { type: String, default: null },
-      stripeCustomerId: { type: String, default: null },
+      // ✅ RevenueCat Specific Fields
+      revenueCatId: { type: String, default: null }, // Original App User ID in RevenueCat
+      platform: { type: String, enum: ["ios", "android", "stripe", null], default: null },
+      activeEntitlements: { type: [String], default: [] }, // Array of active entitlements (e.g. ['premium'])
+
       isTrial: { type: Boolean, default: false },          // ✅ Free trial flag
       trialExpiresAt: { type: Date, default: null },       // ✅ When the 7-day trial ends
       startedAt: { type: Date, default: Date.now },        // ✅ When the current plan/trial started
     },
 
     usage: {
-      swipesCount: { type: Number, default: 0 },
+      unlocksCount: { type: Number, default: 0 },
       keysUsedToday: { type: Number, default: 0 }, // ✅ New: Track daily key usage
       superLikesCount: { type: Number, default: 0 },
       directMessagesCount: { type: Number, default: 0 },
       blindDatesCount: { type: Number, default: 0 },
       lastBlindDateAt: { type: Date, default: null },
-      lastSwipeDate: { type: Date, default: null }, // ✅ Critical Fix: Add missing field
+      lastunlockDate: { type: Date, default: null }, // ✅ Critical Fix: Add missing field
       lastResetDate: { type: Date, default: Date.now },
     },
 
@@ -172,12 +186,12 @@ userSchema.index({ lastMatchCalculation: 1 }); // For match worker
 userSchema.index({ "subscription.plan": 1, "subscription.status": 1 }); // For subscription queries
 userSchema.index({ likedUsers: 1 }); // For match queries
 userSchema.index({ likedBy: 1 }); // For match queries
-userSchema.index({ dislikedUsers: 1 }); // For swipe: "users who disliked me" exclusion
+userSchema.index({ dislikedUsers: 1 }); // For unlock: "users who disliked me" exclusion
 userSchema.index({ blockedUsers: 1 }); // For block feature
 userSchema.index({ blockedBy: 1 }); // For block feature
 userSchema.index({ createdAt: -1 }); // For sorting by newest
 
-// ✅ Swipe fallback query: country + gender + dna (compound for getCandidatesFromDB / getSwipeCards)
+// ✅ unlock fallback query: country + gender + dna (compound for getCandidatesFromDB / getunlockCards)
 userSchema.index({ "location.country": 1, gender: 1, dna: 1 });
 // ✅ Explore "nearby" + sort by new: country + city + createdAt
 userSchema.index({ "location.country": 1, "location.city": 1, createdAt: -1 });

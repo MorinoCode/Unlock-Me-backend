@@ -2,7 +2,7 @@ import { Worker } from "bullmq";
 import redisClient, { bullMQConnection } from "../config/redis.js";
 import User from "../models/User.js";
 import { generateAnalysisData } from "./exploreMatchWorker.js";
-import { generateFeedForUser } from "./swipeFeedWorker.js";
+import { generateFeedForUser } from "./unlockFeedWorker.js";
 
 // Duplicate Redis connection for connection sharing if needed, 
 // though BullMQ manages its own. We need redisClient for Pub/Sub or DB updates.
@@ -30,7 +30,7 @@ const workerHandler = async (job) => {
         }
 
         // 2. Run Heavy Logic
-        console.log(`[AnalysisWorker] ⚙️ Running parallel workers (Explore + Swipe)...`);
+        console.log(`[AnalysisWorker] ⚙️ Running parallel workers (Explore + unlock)...`);
         
         // Run them continuously but wait for both
         const explorePromise = generateAnalysisData(userId).then(async (res) => {
@@ -47,7 +47,7 @@ const workerHandler = async (job) => {
         const feedPromise = generateFeedForUser(user).then(async (res) => {
             if (res) {
                 await redisClient.publish("job-events", JSON.stringify({ 
-                    type: 'SWIPE_FEED_COMPLETE',
+                    type: 'unlock_FEED_COMPLETE',
                     userId, 
                     success: true 
                 }));
@@ -59,7 +59,7 @@ const workerHandler = async (job) => {
 
         console.log(`[AnalysisWorker] 📊 Results Summary for ${userId}:`);
         console.log(`   - Explore Data: ${analysisResult ? "✅ SUCCESS (Object)" : "❌ FAILED (NULL)"}`);
-        console.log(`   - Swipe Feed: ${feedResult ? "✅ SUCCESS" : "⚠️ SKIPPED/DISABLED (False)"}`);
+        console.log(`   - unlock Feed: ${feedResult ? "✅ SUCCESS" : "⚠️ SKIPPED/DISABLED (False)"}`);
 
         const duration = ((Date.now() - startTime) / 1000).toFixed(2);
         console.log(`✅ [AnalysisWorker] Total execution time: ${duration}s`);

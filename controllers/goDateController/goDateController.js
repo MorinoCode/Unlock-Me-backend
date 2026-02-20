@@ -107,8 +107,21 @@ export const createGoDate = async (req, res) => {
       const uploadResponse = await cloudinary.uploader.upload(dataURI, {
         folder: "go_dates",
         format: "webp",
+        moderation: "aws_rekognition_ai_moderation", // ✅ AI Moderation
         transformation: [{ width: 800, height: 600, crop: "fill" }],
       });
+      
+      // ✅ Check Moderation Result
+      if (uploadResponse.moderation && uploadResponse.moderation.length > 0) {
+        if (uploadResponse.moderation[0].status === "rejected") {
+          console.warn(`[GoDate] ⚠️ Image rejected for user ${userId}`);
+          await cloudinary.uploader.destroy(uploadResponse.public_id);
+          return res.status(400).json({ 
+            error: "Image Rejected", 
+            message: "Your image was rejected by our AI moderation system. Please upload a clear, appropriate photo." 
+          });
+        }
+      }
       imageUrl = uploadResponse.secure_url;
       imageId = uploadResponse.public_id;
     }

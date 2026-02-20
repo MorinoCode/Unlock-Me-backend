@@ -23,7 +23,7 @@ import userOnboardingRoutes from "./routes/userOnboardingRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import exploreRoutes from "./routes/exploreRoutes.js";
 import matchesRoutes from "./routes/matchesRoutes.js";
-import swipeRoutes from "./routes/swipeRoutes.js";
+import unlockRoutes from "./routes/unlockRoutes.js";
 import locationRoutes from "./routes/locationRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import postRoutes from "./routes/postRoutes.js";
@@ -33,6 +33,7 @@ import webhookRoutes from "./routes/webhookRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import goDateRoutes from "./routes/goDateRoutes.js";
 import contactRoutes from "./routes/contactRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js"; // ✅ NEW: Isolated Admin Routes
 
 import { handleSocketConnection } from "./sockets/socketHandler.js";
 
@@ -40,7 +41,7 @@ import { handleSocketConnection } from "./sockets/socketHandler.js";
 validateEnv();
 
 // ✅ Workers (Background Jobs)
-import "./workers/swipeFeedWorker.js"; // Swipe Feed Worker - runs every 6 hours
+import "./workers/unlockFeedWorker.js"; // unlock Feed Worker - runs every 6 hours
 // matchWorker.js is now on-demand only (no cron) - triggered via generateAnalysisData()
 import "./workers/redisKeepAliveWorker.js"; // Redis Keep-Alive - runs every 6 hours
 import "./workers/arrayCleanupWorker.js"; // Array Cleanup - runs daily at 2 AM
@@ -48,7 +49,7 @@ import "./workers/trialExpirationWorker.js"; // ✅ Trial Expiration - runs ever
 import "./workers/analysisQueueWorker.js"; // ✅ NEW: BullMQ Analysis Worker
 import "./workers/goDateWorker.js"; // ✅ Enterprise GoDate Worker
 import "./workers/goDateCleanupCron.js"; // ✅ Enterprise GoDate Cleanup scheduler
-import "./workers/swipeWorker.js"; // ✅ NEW: High-Scale Swipe Worker
+import "./workers/unlockWorker.js"; // ✅ NEW: High-Scale unlock Worker
 import "./workers/notificationWorker.js"; // ✅ NEW: Enterprise Notification Worker
 import "./workers/mediaWorker.js"; // ✅ NEW: Enterprise Media Worker
 import "./workers/onboardingWorker.js"; // ✅ NEW: Enterprise Onboarding Worker
@@ -88,9 +89,9 @@ const setupRedisSubscriber = async () => {
           io.to(event.userId).emit("explore_complete", { 
             success: true 
           });
-        } else if (event.type === 'SWIPE_FEED_COMPLETE') {
-          console.log(`🔔 [Socket] Notifying user ${event.userId}: Swipe Feed Complete`);
-          io.to(event.userId).emit("swipe_feed_complete", { 
+        } else if (event.type === 'unlock_FEED_COMPLETE') {
+          console.log(`🔔 [Socket] Notifying user ${event.userId}: unlock Feed Complete`);
+          io.to(event.userId).emit("unlock_feed_complete", { 
             success: true 
           });
         } else if (event.type === 'ANALYSIS_FAILED') {
@@ -106,6 +107,13 @@ const setupRedisSubscriber = async () => {
           io.to(event.userId).emit("media_processed", {
             mediaType: event.mediaType,
             payload: event.payload
+          });
+        } else if (event.type === 'MEDIA_REJECTED') {
+          console.log(`⚠️ [Socket] Emit Media REJECTED to user ${event.userId}`);
+          io.to(event.userId).emit("media_rejected", {
+            mediaType: event.mediaType,
+            reason: event.reason,
+            notes: event.notes
           });
         } else if (event.type === 'ONBOARDING_PROCESSED') {
           console.log(`🧬 [Socket] Emit Onboarding Processed to user ${event.userId}`);
@@ -135,6 +143,7 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:5174", // ✅ NEW: Admin Panel
   "http://localhost:5000",
   "https://unlock-me-frontend.vercel.app",
   "https://unlock-me.app",
@@ -343,7 +352,16 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-  handleSocketConnection(io, socket, userSocketMap);
+  try {
+    handleSocketConnection(io, socket, userSocketMap);
+
+    // ✅ Crash-proofing: Catch all socket errors
+    socket.on("error", (err) => {
+      console.error(`🔥 [Socket] Internal Error for User ${socket.userId || 'Unknown'}:`, err.message);
+    });
+  } catch (err) {
+    console.error("🔥 [Socket] Fatal Connection Setup Error:", err);
+  }
 });
 
 // ==========================================
@@ -355,15 +373,17 @@ app.use("/api/user", userRoutes);
 app.use("/api/user/onboarding", userOnboardingRoutes);
 app.use("/api/user/matches", matchesRoutes);
 app.use("/api/explore", exploreRoutes);
-app.use("/api/swipe", swipeRoutes);
+app.use("/api/unlock", unlockRoutes);
 app.use("/api/locations", locationRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/posts", postRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/webhooks", webhookRoutes); // ✅ Standardized Webhooks
 app.use("/api/payment", paymentRoutes);
 app.use("/api/blind-date", blindDateRoutes);
 app.use("/api/go-date", goDateRoutes);
 app.use("/api/contact", contactRoutes);
+app.use("/api/admin", adminRoutes); // ✅ NEW: Admin endpoints
 
 app.get("/ping", (req, res) => {
   res.status(200).send("pong 🏓");

@@ -59,13 +59,13 @@ export const getSoulmatePermissions = (plan) => {
   }
 };
 
-// --- SWIPE LIMITS ---
+// --- unlock LIMITS ---
 // ✅ Sync with subscriptionRules.js
-export const getSwipeLimit = (plan) => {
+export const getunlockLimit = (plan) => {
   const p = normalizePlan(plan);
   switch (p) {
     case PLANS.DIAMOND:
-      return Infinity; // ✅ Unlimited Swipes
+      return Infinity; // ✅ Unlimited unlocks
     case PLANS.PLATINUM:
       return 110;
     case PLANS.GOLD:

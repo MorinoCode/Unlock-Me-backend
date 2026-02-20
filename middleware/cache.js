@@ -10,7 +10,7 @@ const CACHE_DURATIONS = {
   USER_PROFILE: 300,      // 5 minutes
   MATCHES: 600,           // 10 minutes
   EXPLORE: 300,           // 5 minutes
-  SWIPE_CARDS: 180,       // 3 minutes
+  unlock_CARDS: 180,       // 3 minutes
 };
 
 export const cacheMiddleware = (duration = CACHE_DURATIONS.USER_PROFILE) => {

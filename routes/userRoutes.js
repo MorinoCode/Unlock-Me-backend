@@ -22,8 +22,11 @@ import { signoutUser } from "../controllers/signout/signoutUser.js";
 import { refreshToken } from "../controllers/auth/refreshToken.js";
 import { checkUserReady } from "../controllers/user/userStatus.js";
 import { triggerAnalysisWorkers } from "../controllers/user/triggerAnalysis.js";
-// ✅ Security Fix: Import validation middleware
 import { validateSignup, validateSignin, validateUpdateProfile, validateUpdatePassword } from "../middleware/validation.js";
+import { requestVerification } from "../controllers/verificationController/verificationController.js";
+import multer from "multer";
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 const router = express.Router();
 
@@ -62,5 +65,8 @@ router.get("/blocked", protect, getBlockedUsers);
 import { getKeyStatus, unlockProfile } from "../controllers/user/userKeys.js";
 router.get("/keys/status", protect, getKeyStatus);
 router.post("/keys/unlock", protect, unlockProfile);
+
+// ✅ Verification Endpoint
+router.post("/verification/request", protect, upload.single("video"), requestVerification);
 
 export default router;

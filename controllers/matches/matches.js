@@ -255,7 +255,7 @@ export const getMatchInsights = async (req, res) => {
         avatar: other.avatar
       },
       matchScore: score,
-      dna: insights.dnaComparison.other, // Add flat DNA for frontend SwipeCard
+      dna: insights.dnaComparison.other, // Add flat DNA for frontend unlockCard
       ...insights
     };
     await setMatchesCache(myId, cacheKey, payload, INSIGHTS_CACHE_TTL);

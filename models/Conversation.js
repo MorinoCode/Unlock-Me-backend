@@ -25,7 +25,7 @@ const conversationSchema = new mongoose.Schema(
     },
     matchType: {
       type: String,
-      enum: ["swipe", "blind_date", "direct", "go_date"],
+      enum: ["unlock", "blind_date", "direct", "go_date"],
       default: "direct",
     },
     isUnlocked: {

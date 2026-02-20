@@ -11,6 +11,21 @@ export const saveBirthday = async (req, res) => {
     if (!day || !month || !year)
       return res.status(400).json({ message: "Birthday is required" });
 
+    // ✅ App Store Compliance: Strict 18+ Check on Backend
+    const today = new Date();
+    const birthDate = new Date(year, month - 1, day);
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const m = today.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+
+    if (age < 18) {
+      return res.status(403).json({ 
+        message: "App Store Policy: You must be at least 18 years old to use Unlock-Me." 
+      });
+    }
+
     // ذخیره به صورت آبجکت مطابق با مدل جدید
     await User.findByIdAndUpdate(req.user.userId, {
       birthday: { day, month, year },

@@ -1,7 +1,7 @@
 import { Queue } from "bullmq";
 import { bullMQConnection } from "../config/redis.js";
 
-const swipeFeedQueue = new Queue("swipe-feed", {
+const unlockFeedQueue = new Queue("unlock-feed", {
   connection: bullMQConnection,
   defaultJobOptions: {
     removeOnComplete: true,
@@ -14,9 +14,9 @@ const swipeFeedQueue = new Queue("swipe-feed", {
   },
 });
 
-export const addToSwipeFeedQueue = async (userId, priority = false) => {
+export const addTounlockFeedQueue = async (userId, priority = false) => {
   try {
-    await swipeFeedQueue.add(
+    await unlockFeedQueue.add(
       "generate-feed",
       { userId },
       {
@@ -30,4 +30,4 @@ export const addToSwipeFeedQueue = async (userId, priority = false) => {
   }
 };
 
-export default swipeFeedQueue;
+export default unlockFeedQueue;

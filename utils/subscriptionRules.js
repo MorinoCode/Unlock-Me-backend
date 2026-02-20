@@ -65,13 +65,13 @@ export const getDailyDmLimit = (plan) => {
 };
 
 // ---------------------------------------------
-// 4. Swipe Limits
+// 4. unlock Limits
 // ---------------------------------------------
-export const getSwipeLimit = (plan) => {
+export const getunlockLimit = (plan) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
   switch (normalizedPlan) {
     case PLANS.DIAMOND:
-      return Infinity; // ✅ Unlimited Swipes
+      return Infinity; // ✅ Unlimited unlocks
     case PLANS.PLATINUM:
       return 110;
     case PLANS.GOLD:
@@ -266,7 +266,7 @@ export const getGoDateApplyConfig = (plan) => {
   }
 };
 // ---------------------------------------------
-// 11. Daily Unlock Keys (Swipe Page)
+// 11. Daily Unlock Keys (unlock Page)
 // ---------------------------------------------
 export const getDailyKeyLimit = (plan) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;

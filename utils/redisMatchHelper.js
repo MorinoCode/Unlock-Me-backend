@@ -6,10 +6,10 @@ export const REDIS_PREFIXES = {
   USER_RANKING: "rank", // rank:{userId}:{country}:{gender} -> sorted set of candidateIds with scores
   // Hash: store compatibility scores
   COMPATIBILITY: "comp", // comp:{userId1}:{userId2} -> score
-  // Set: store excluded users (already swiped)
+  // Set: store excluded users (already unlockd)
   EXCLUDED: "excl", // excl:{userId} -> set of userIds
-  // Cache: pre-computed swipe cards
-  SWIPE_CACHE: "swipe", // swipe:{userId} -> JSON array
+  // Cache: pre-computed unlock cards
+  unlock_CACHE: "unlock", // unlock:{userId} -> JSON array
   // Sorted Set: potential matches pool
   POOL: "pool", // pool:{userId} -> sorted set of candidateIds
   
@@ -19,7 +19,7 @@ export const REDIS_PREFIXES = {
   EXPLORE_INTEREST: "explore:interest", // explore:interest:{tag} -> SET
   EXPLORE_GENDER: "explore:gender", // explore:gender:{country}:{gender} -> SET
 
-  // ✅ NEW: HIGH-SCALE SWIPE KEYS
+  // ✅ NEW: HIGH-SCALE unlock KEYS
   LIKES: "likes", // likes:{userId} -> SET of targetUserIds
   USAGE_COUNTER: "usage", // usage:{userId}:{YYYY-MM-DD} -> string (inc)
 };
@@ -227,7 +227,7 @@ export const getTopCandidates = async (
 };
 
 /**
- * ✅ Add user to Excluded List (Swiped Left/Right)
+ * ✅ Add user to Excluded List (unlockd Left/Right)
  */
 export const addExcludedUser = async (userId, excludedId) => {
     if (!redisClient || !redisClient.isOpen) return;
@@ -235,7 +235,7 @@ export const addExcludedUser = async (userId, excludedId) => {
         const key = `${REDIS_PREFIXES.EXCLUDED}:${userId}`;
         // Add to Set
         await redisClient.sAdd(key, excludedId.toString());
-        // Optional: Set expiration if we want "temporary" exclusion, but usually swipes are permanent or long-lived in DB.
+        // Optional: Set expiration if we want "temporary" exclusion, but usually unlocks are permanent or long-lived in DB.
         // In Redis we might keep them for a session duration or sync with DB.
         // For now, let's keep it without specific expiry or maybe 24h cache.
         await redisClient.expire(key, 86400); 
@@ -298,7 +298,7 @@ export const getFromPotentialPoolPaginated = async (userId, limit = 20, excludeI
 
 
 /**
- * ✅ Invalidate User Caches (Pool, Swipe Cache)
+ * ✅ Invalidate User Caches (Pool, unlock Cache)
  * Called when user profile updates significantly (location, gender, etc).
  */
 export const invalidateUserCaches = async (userId) => {
@@ -309,8 +309,8 @@ export const invalidateUserCaches = async (userId) => {
         // Delete Potential Pool
         pipeline.del(`${REDIS_PREFIXES.POOL}:${userId}`);
         
-        // Delete Swipe Cache
-        pipeline.del(`${REDIS_PREFIXES.SWIPE_CACHE}:${userId}`);
+        // Delete unlock Cache
+        pipeline.del(`${REDIS_PREFIXES.unlock_CACHE}:${userId}`);
 
         // We could also delete Rankings if we knew the keys, but they expire in 24h.
         
@@ -398,9 +398,9 @@ export const checkRedisMatch = async (myId, targetId) => {
 };
 
 /**
- * ✅ Phase 3: Increment Swipe Counter (Atomic)
+ * ✅ Phase 3: Increment unlock Counter (Atomic)
  */
-export const incrementSwipeCounter = async (userId, type = "swipes") => {
+export const incrementunlockCounter = async (userId, type = "unlocks") => {
     if (!redisClient || !redisClient.isOpen) return 0;
     try {
         const date = new Date().toISOString().split('T')[0];
@@ -417,9 +417,9 @@ export const incrementSwipeCounter = async (userId, type = "swipes") => {
 };
 
 /**
- * ✅ Phase 3: Get Swipe Counter
+ * ✅ Phase 3: Get unlock Counter
  */
-export const getSwipeCounter = async (userId, type = "swipes") => {
+export const getunlockCounter = async (userId, type = "unlocks") => {
     if (!redisClient || !redisClient.isOpen) return 0;
     try {
         const date = new Date().toISOString().split('T')[0];

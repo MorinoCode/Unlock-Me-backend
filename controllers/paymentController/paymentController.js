@@ -1,457 +1,280 @@
-import Stripe from "stripe";
-import dotenv from "dotenv";
+/**
+ * paymentController.js
+ * 
+ * ✅ Stripe REMOVED. All purchases are handled via RevenueCat (Apple/Google IAP).
+ * - /api/payment/plans  → static plan list for UI display
+ * - /api/payment/cancel → DB-only cancel (user keeps access until expiresAt)
+ * - /api/payment/revenuecat-webhook → RevenueCat webhook (source of truth)
+ * - /api/payment/change-plan → redirects user to manage in App Store/Google Play
+ */
+
 import User from "../../models/User.js";
-import { getAppCache, setAppCache } from "../../utils/cacheHelper.js";
+import { invalidateMatchesCache } from "../../utils/cacheHelper.js";
 
-dotenv.config();
-const PLANS_CACHE_TTL = 3600; // 1 hour
+// ─────────────────────────────────────────────────────────────────
+// STATIC PLAN DEFINITIONS (prices shown for UI only)
+// Real billing is handled by RevenueCat in the App Store / Google Play
+// ─────────────────────────────────────────────────────────────────
+const STATIC_PLANS = {
+  sek: [
+    { id: "gold_sek",     productName: "Gold Plan",     amount: 99,  currency: "sek", interval: "month" },
+    { id: "platinum_sek", productName: "Platinum Plan", amount: 149, currency: "sek", interval: "month" },
+    { id: "diamond_sek",  productName: "Diamond Plan",  amount: 199, currency: "sek", interval: "month" },
+  ],
+  usd: [
+    { id: "gold_usd",     productName: "Gold Plan",     amount: 9,   currency: "usd", interval: "month" },
+    { id: "platinum_usd", productName: "Platinum Plan", amount: 14,  currency: "usd", interval: "month" },
+    { id: "diamond_usd",  productName: "Diamond Plan",  amount: 19,  currency: "usd", interval: "month" },
+  ],
+  eur: [
+    { id: "gold_eur",     productName: "Gold Plan",     amount: 9,   currency: "eur", interval: "month" },
+    { id: "platinum_eur", productName: "Platinum Plan", amount: 13,  currency: "eur", interval: "month" },
+    { id: "diamond_eur",  productName: "Diamond Plan",  amount: 18,  currency: "eur", interval: "month" },
+  ],
+  gbp: [
+    { id: "gold_gbp",     productName: "Gold Plan",     amount: 8,   currency: "gbp", interval: "month" },
+    { id: "platinum_gbp", productName: "Platinum Plan", amount: 12,  currency: "gbp", interval: "month" },
+    { id: "diamond_gbp",  productName: "Diamond Plan",  amount: 16,  currency: "gbp", interval: "month" },
+  ],
+  nok: [
+    { id: "gold_nok",     productName: "Gold Plan",     amount: 99,  currency: "nok", interval: "month" },
+    { id: "platinum_nok", productName: "Platinum Plan", amount: 149, currency: "nok", interval: "month" },
+    { id: "diamond_nok",  productName: "Diamond Plan",  amount: 199, currency: "nok", interval: "month" },
+  ],
+  dkk: [
+    { id: "gold_dkk",     productName: "Gold Plan",     amount: 69,  currency: "dkk", interval: "month" },
+    { id: "platinum_dkk", productName: "Platinum Plan", amount: 99,  currency: "dkk", interval: "month" },
+    { id: "diamond_dkk",  productName: "Diamond Plan",  amount: 139, currency: "dkk", interval: "month" },
+  ],
+  inr: [
+    { id: "gold_inr",     productName: "Gold Plan",     amount: 749, currency: "inr", interval: "month" },
+    { id: "platinum_inr", productName: "Platinum Plan", amount: 1099,currency: "inr", interval: "month" },
+    { id: "diamond_inr",  productName: "Diamond Plan",  amount: 1499,currency: "inr", interval: "month" },
+  ],
+};
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
-// نگاشت کشور به ارز (کد ISO کشور -> کد ارز Stripe)
 const COUNTRY_TO_CURRENCY = {
-  SE: "sek",
-  SV: "usd", // ✅ Fix #19: SV is El Salvador (uses USD), not Sweden (SE is Sweden)
-  US: "usd",
-  GB: "gbp",
-  CA: "cad",
-  AU: "aud",
-  NZ: "nzd",
-  DE: "eur",
-  FR: "eur",
-  IT: "eur",
-  ES: "eur",
-  NL: "eur",
-  AT: "eur",
-  BE: "eur",
-  FI: "eur",
-  IE: "eur",
-  PT: "eur",
-  NO: "nok",
-  DK: "dkk",
-  PL: "pln",
-  CH: "chf",
-  CZ: "czk",
+  SE: "sek", SV: "usd", US: "usd", GB: "gbp",
+  CA: "usd", AU: "usd", NZ: "usd",
+  DE: "eur", FR: "eur", IT: "eur", ES: "eur",
+  NL: "eur", AT: "eur", BE: "eur", FI: "eur",
+  IE: "eur", PT: "eur",
+  NO: "nok", DK: "dkk",
   IN: "inr",
-  JP: "jpy",
-  CN: "cny",
-  KR: "krw",
-  BR: "brl",
-  MX: "mxn",
-  RU: "rub",
-  AE: "aed",
-  SA: "sar",
-  EG: "egp",
-  TR: "try",
-  IL: "ils",
 };
 
 function getCurrencyFromCountry(country) {
   if (!country || typeof country !== "string") return null;
-  const code = country.trim().toUpperCase().slice(0, 2);
-  return COUNTRY_TO_CURRENCY[code] || null;
+  return COUNTRY_TO_CURRENCY[country.trim().toUpperCase().slice(0, 2)] || null;
 }
 
-// ✅ 1. دریافت لیست پلن‌ها با پشتیبانی ارز بر اساس کشور/پارامتر
+// ─────────────────────────────────────────────────────────────────
+// 1. GET /api/payment/plans  — static plan list for UI
+// ─────────────────────────────────────────────────────────────────
 export const getSubscriptionPlans = async (req, res) => {
   try {
-    const requestedCurrency =
-      (req.query.currency || "").toLowerCase().trim() || null;
-    let preferredCurrency = requestedCurrency;
-    if (!preferredCurrency && req.user != null) {
+    const requestedCurrency = (req.query.currency || "").toLowerCase().trim();
+
+    let currency = requestedCurrency || null;
+    if (!currency && req.user) {
       const userId = req.user._id ?? req.user.userId;
       if (userId) {
         const user = await User.findById(userId).select("location").lean();
-        const country = user?.location?.country;
-        preferredCurrency = getCurrencyFromCountry(country);
+        currency = getCurrencyFromCountry(user?.location?.country);
       }
     }
-    const cacheKey = `subscription_plans_${preferredCurrency || "default"}`;
-    const cached = await getAppCache(cacheKey);
-    if (cached) return res.status(200).json(cached);
+    currency = currency || "usd";
 
-    const prices = await stripe.prices.list({
-      active: true,
-      expand: ["data.product"],
-    });
-
-    // گروه‌بندی بر اساس product.id و انتخاب یک قیمت به‌ازای هر محصول (ترجیح ارز کاربر)
-    const byProduct = {};
-    for (const price of prices.data) {
-      const productId = price.product?.id ?? price.product;
-      if (!productId) continue;
-      const product =
-        price.product?.object === "product" ? price.product : null;
-      if (!byProduct[productId]) byProduct[productId] = { product, prices: [] };
-      byProduct[productId].prices.push(price);
-    }
-
-    const plans = [];
-    for (const productId of Object.keys(byProduct)) {
-      const { product, prices: productPrices } = byProduct[productId];
-      const productName = product?.name ?? "Plan";
-      let chosen = productPrices[0];
-      if (preferredCurrency) {
-        const match = productPrices.find(
-          (p) => (p.currency || "").toLowerCase() === preferredCurrency
-        );
-        if (match) chosen = match;
-      }
-      // ✅ Bug Fix: Handle zero-decimal currencies (JPY, KRW, etc.)
-      const ZERO_DECIMAL_CURRENCIES = ['bif','clp','djf','gnf','jpy','kmf','krw','mga','pyg','rwf','ugx','vnd','vuv','xaf','xof','xpf'];
-      const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.includes(chosen.currency?.toLowerCase());
-      plans.push({
-        id: chosen.id,
-        nickname: chosen.nickname,
-        amount:
-          chosen.unit_amount != null
-            ? isZeroDecimal ? chosen.unit_amount : Math.round(chosen.unit_amount / 100)
-            : null,
-        currency: chosen.currency?.toLowerCase() || chosen.currency,
-        interval: chosen.recurring?.interval || "month",
-        productName,
-        features: product?.metadata?.features
-          ? typeof product.metadata.features === "string"
-            ? (() => {
-                try {
-                  return JSON.parse(product.metadata.features);
-                } catch {
-                  return [];
-                }
-              })()
-            : product.metadata.features
-          : [],
-      });
-    }
-
-    const sorted = plans.sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
-    await setAppCache(cacheKey, sorted, PLANS_CACHE_TTL);
-    res.status(200).json(sorted);
-  } catch (error) {
-    console.error("Stripe Fetch Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ error: errorMessage });
+    const plans = STATIC_PLANS[currency] ?? STATIC_PLANS["usd"];
+    return res.status(200).json(plans);
+  } catch (err) {
+    console.error("[Plans] Error:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-// ✅ 2. تابع اصلاح شده: ساخت لینک پرداخت با Price ID دریافتی
-export const createCheckoutSession = async (req, res) => {
-  try {
-    // ✅ تغییر: گرفتن planName از بدنه درخواست
-    const { priceId, planName } = req.body;
-    const userId = req.user._id;
-
-    if (!priceId) {
-      return res.status(400).json({ error: "Price ID is required" });
-    }
-
-    const user = await User.findById(userId);
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      customer_email: user?.email,
-
-      // ✅ تغییر مهم: ارسال planName در متادیتا برای استفاده در Webhook
-      metadata: {
-        userId: userId.toString(),
-        planName: planName || "premium",
-      },
-
-      success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.CLIENT_URL}/upgrade`,
-    });
-
-    res.json({ url: session.url });
-  } catch (error) {
-    console.error("Checkout Session Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ error: errorMessage });
-  }
-};
-
-// ✅ Cancel Subscription (now actually cancels Stripe subscription)
+// ─────────────────────────────────────────────────────────────────
+// 2. POST /api/payment/cancel  — DB-only cancel, no Stripe
+// ─────────────────────────────────────────────────────────────────
 export const cancelSubscription = async (req, res) => {
   try {
     const userId = req.user._id || req.user.userId;
     const user = await User.findById(userId);
-    
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
-
-    // Check if user has an active subscription
     if (user.subscription?.status !== "active" || user.subscription?.plan === "free") {
       return res.status(400).json({ message: "No active subscription to cancel" });
     }
 
-    // ✅ Cancel the actual Stripe subscription (if we have the ID)
-    const stripeSubId = user.subscription?.stripeSubscriptionId;
-    if (stripeSubId) {
-      try {
-        // cancel_at_period_end = true → user keeps access until end of billing period
-        await stripe.subscriptions.update(stripeSubId, {
-          cancel_at_period_end: true
-        });
-        console.log(`✅ Stripe subscription ${stripeSubId} set to cancel at period end`);
-      } catch (stripeErr) {
-        // If subscription already canceled or not found, log but continue
-        console.warn(`⚠️ Stripe cancel warning for ${stripeSubId}:`, stripeErr.message);
-      }
-    } else {
-      console.warn(`⚠️ No stripeSubscriptionId found for user ${userId}. DB-only cancel.`);
-    }
-
-    // Update subscription status to canceled in DB
-    // Keep expiresAt as is (user keeps access until expiry)
+    // ✅ DB-only cancel: user keeps access until expiresAt (no Stripe call)
     await User.findByIdAndUpdate(userId, {
-      $set: {
-        "subscription.status": "canceled"
-      }
+      $set: { "subscription.status": "canceled" }
     });
 
-    res.status(200).json({ 
-      message: "Subscription canceled successfully",
+    // Invalidate cache
+    await invalidateMatchesCache(userId.toString(), "profile").catch(() => {});
+
+    console.log(`[Cancel] User ${userId} canceled subscription (plan kept until ${user.subscription.expiresAt})`);
+
+    return res.status(200).json({
+      message: "Subscription canceled. You keep access until the end of your billing period.",
       subscription: {
         plan: user.subscription.plan,
         status: "canceled",
-        expiresAt: user.subscription.expiresAt
-      }
+        expiresAt: user.subscription.expiresAt,
+      },
     });
-  } catch (error) {
-    console.error("Cancel Subscription Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ error: errorMessage });
+  } catch (err) {
+    console.error("[Cancel] Error:", err);
+    return res.status(500).json({ error: process.env.NODE_ENV === "production" ? "Server error" : err.message });
   }
 };
 
-// ✅ Improvement #20: Change Plan (modify existing Stripe subscription instead of new checkout)
+// ─────────────────────────────────────────────────────────────────
+// 3. POST /api/payment/change-plan  — redirect to App Store/Play
+// ─────────────────────────────────────────────────────────────────
 export const changePlan = async (req, res) => {
-  try {
-    const { priceId, planName } = req.body;
-    const userId = req.user._id || req.user.userId;
+  return res.status(200).json({
+    success: false,
+    redirectToApp: true,
+    message: "To change your plan, open the Unlock Me app on your iPhone or Android device and manage your subscription from the App Store or Google Play.",
+  });
+};
 
-    if (!priceId || !planName) {
-      return res.status(400).json({ error: "Price ID and plan name are required" });
+// ─────────────────────────────────────────────────────────────────
+// 4. POST /api/payment/revenuecat-webhook  — RevenueCat → DB sync
+//    Called by RevenueCat when: purchase, renewal, cancellation, expiry
+// ─────────────────────────────────────────────────────────────────
+export const revenueCatWebhook = async (req, res) => {
+  try {
+    // ✅ Optional: Verify RevenueCat webhook secret
+    const secret = process.env.REVENUECAT_WEBHOOK_SECRET;
+    if (secret) {
+      const incomingSecret = req.headers["authorization"] || req.headers["x-revenuecat-secret"];
+      if (incomingSecret !== secret) {
+        console.warn("[RevenueCat Webhook] ❌ Invalid secret");
+        return res.status(401).json({ error: "Unauthorized" });
+      }
     }
+
+    const { event } = req.body;
+    if (!event) return res.status(400).json({ error: "Missing event" });
+
+    const { type, app_user_id, product_id, expiration_at_ms, purchased_at_ms } = event;
+
+    // app_user_id must match a MongoDB user _id
+    const userId = app_user_id;
+    if (!userId) return res.status(400).json({ error: "Missing app_user_id" });
 
     const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    const stripeSubId = user.subscription?.stripeSubscriptionId;
-
-    // If user has an active Stripe subscription, modify it instead of creating a new one
-    if (stripeSubId) {
-      try {
-        const subscription = await stripe.subscriptions.retrieve(stripeSubId);
-        if (subscription && subscription.status !== 'canceled') {
-          // Update the subscription with the new price
-          const updatedSubscription = await stripe.subscriptions.update(stripeSubId, {
-            items: [{
-              id: subscription.items.data[0].id,
-              price: priceId,
-            }],
-            proration_behavior: 'create_prorations',
-          });
-
-          // Update local DB
-          const planLower = planName.toLowerCase();
-          let planType = 'premium';
-          if (planLower.includes('diamond')) planType = 'diamond';
-          else if (planLower.includes('platinum')) planType = 'platinum';
-          else if (planLower.includes('gold')) planType = 'gold';
-
-          await User.findByIdAndUpdate(userId, {
-            $set: {
-              "subscription.plan": planType,
-              "subscription.status": "active",
-            }
-          });
-
-          return res.json({ 
-            success: true, 
-            message: `Plan changed to ${planType}`,
-            subscriptionId: updatedSubscription.id 
-          });
-        }
-      } catch (stripeErr) {
-        console.warn(`⚠️ Could not modify existing subscription: ${stripeErr.message}. Falling back to new checkout.`);
-      }
-    }
-
-    // Fallback: Create new checkout session if no existing subscription
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      customer_email: user?.email,
-      metadata: {
-        userId: userId.toString(),
-        planName: planName,
-        isPlanChange: "true"
-      },
-      success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.CLIENT_URL}/myprofile`,
-    });
-
-    res.json({ url: session.url });
-  } catch (error) {
-    console.error("Change Plan Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ error: errorMessage });
-  }
-};
-
-// ✅ Verify Payment Session and Update Subscription (Fallback if webhook fails)
-export const verifyPaymentAndUpdateSubscription = async (req, res) => {
-  try {
-    const { sessionId } = req.body;
-    const userId = req.user._id || req.user.userId;
-
-    if (!sessionId) {
-      return res.status(400).json({ error: "Session ID is required" });
-    }
-
-    // Retrieve session from Stripe with expanded line_items
-    const session = await stripe.checkout.sessions.retrieve(sessionId, {
-      expand: ['line_items', 'line_items.data.price.product', 'subscription']
-    });
-
-    // Security check: verify userId matches session metadata
-    const sessionUserId = session.metadata?.userId;
-    if (sessionUserId && sessionUserId !== userId.toString()) {
-      return res.status(403).json({ error: "Session does not belong to this user" });
-    }
-
-    // Check if payment was successful
-    if (session.payment_status !== 'paid') {
-      return res.status(400).json({ error: "Payment not completed" });
-    }
-
-    // Extract plan name from metadata or product
-    let planName = session.metadata?.planName;
-    
-    if (!planName && session.line_items?.data?.[0]?.price?.product) {
-      try {
-        const product = session.line_items.data[0].price.product;
-        if (typeof product === 'object') {
-          planName = product.name || product.metadata?.planName;
-        } else {
-          // If product is just an ID, retrieve it
-          const productObj = await stripe.products.retrieve(product);
-          planName = productObj.name || productObj.metadata?.planName;
-        }
-      } catch (err) {
-        console.error("Error fetching product:", err);
-      }
-    }
-
-    // Fallback: get from subscription
-    if (!planName && session.subscription) {
-      try {
-        const subscriptionId = typeof session.subscription === 'string' 
-          ? session.subscription 
-          : session.subscription.id;
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-          expand: ['items.data.price.product']
-        });
-        const price = subscription.items.data[0]?.price;
-        if (price?.product) {
-          const product = price.product;
-          if (typeof product === 'object') {
-            planName = product.name || product.metadata?.planName;
-          } else {
-            const productObj = await stripe.products.retrieve(product);
-            planName = productObj.name || productObj.metadata?.planName;
-          }
-        }
-      } catch (err) {
-        console.error("Error fetching subscription:", err);
-      }
-    }
-
-    planName = planName || 'premium';
-
-    // Determine plan type
-    let planType = 'free';
-    const planLower = planName.toLowerCase();
-    if (planLower.includes('diamond')) {
-      planType = 'diamond';
-    } else if (planLower.includes('platinum')) {
-      planType = 'platinum';
-    } else if (planLower.includes('gold')) {
-      planType = 'gold';
-    } else {
-      // ✅ Bug Fix: Any paid plan that doesn't match specific tiers gets premium
-      planType = 'premium';
-    }
-
-    // Calculate expiration date (30 days from now)
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
-
-    // Get Stripe subscription ID from session
-    const stripeSubId = typeof session.subscription === 'string' 
-      ? session.subscription 
-      : session.subscription?.id || null;
-
-    // Update database
-    const updatedUser = await User.findByIdAndUpdate(userId, {
-      $set: {
-        "subscription.plan": planType,
-        "subscription.status": "active",
-        "subscription.expiresAt": expiresAt,
-        "subscription.stripeSubscriptionId": stripeSubId,
-        "subscription.stripeCustomerId": session.customer || null,
-        "subscription.isTrial": false,         // ✅ Payment success: trial ends
-        "subscription.trialExpiresAt": null,   // ✅ Payment success: trial ends
-        "subscription.startedAt": new Date()   // ✅ Record start date
-      }
-    }, { new: true });
-
-    if (!updatedUser) {
+      console.warn(`[RevenueCat Webhook] User ${userId} not found`);
       return res.status(404).json({ error: "User not found" });
     }
 
-    console.log(`✅ Subscription verified and updated. User ${userId} now has plan: ${planType}`);
+    // Determine plan from product_id (e.g. "unlock_me_gold_monthly")
+    const productLower = (product_id || "").toLowerCase();
+    let plan = "free";
+    if (productLower.includes("diamond")) plan = "diamond";
+    else if (productLower.includes("platinum")) plan = "platinum";
+    else if (productLower.includes("gold")) plan = "gold";
 
-    res.json({ 
-      success: true,
-      plan: planType,
-      expiresAt: expiresAt.toISOString(),
-      message: "Subscription updated successfully"
-    });
-  } catch (error) {
-    console.error("Verify Payment Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ error: errorMessage });
+    const expiresAt = expiration_at_ms ? new Date(expiration_at_ms) : null;
+    const startedAt = purchased_at_ms ? new Date(purchased_at_ms) : null;
+
+    let update = {};
+
+    switch (type) {
+      // ── Active subscription events ──────────────────────────────
+      case "INITIAL_PURCHASE":
+      case "RENEWAL":
+      case "PRODUCT_CHANGE":
+      case "NON_RENEWING_PURCHASE":
+        update = {
+          "subscription.plan": plan,
+          "subscription.status": "active",
+          "subscription.expiresAt": expiresAt,
+          "subscription.startedAt": startedAt || user.subscription?.startedAt || new Date(),
+          "subscription.isTrial": false,
+        };
+        console.log(`[RevenueCat] ✅ ${type} → User ${userId} is now on ${plan}`);
+        break;
+
+      // ── Trial ──────────────────────────────────────────────────
+      case "TRIAL_STARTED":
+        update = {
+          "subscription.plan": plan,
+          "subscription.status": "active",
+          "subscription.expiresAt": expiresAt,
+          "subscription.startedAt": startedAt || new Date(),
+          "subscription.isTrial": true,
+        };
+        console.log(`[RevenueCat] 🆓 Trial started → User ${userId} on ${plan}`);
+        break;
+
+      case "TRIAL_CONVERTED":
+        update = {
+          "subscription.isTrial": false,
+          "subscription.status": "active",
+          "subscription.plan": plan,
+          "subscription.expiresAt": expiresAt,
+        };
+        break;
+
+      // ── Cancellation (user canceled but still has time left) ─────
+      case "CANCELLATION":
+      case "SUBSCRIBER_ALIAS":
+        update = {
+          "subscription.status": "canceled",
+          "subscription.expiresAt": expiresAt,
+        };
+        console.log(`[RevenueCat] ❌ Canceled → User ${userId} until ${expiresAt}`);
+        break;
+
+      // ── Expiry (access fully ended) ───────────────────────────
+      case "EXPIRATION":
+      case "SUBSCRIBER_REFUND":
+      case "BILLING_ISSUE":
+        update = {
+          "subscription.plan": "free",
+          "subscription.status": "expired",
+          "subscription.expiresAt": null,
+          "subscription.startedAt": null,
+          "subscription.isTrial": false,
+        };
+        console.log(`[RevenueCat] ⌛ Expired → User ${userId} reverted to free`);
+        break;
+
+      default:
+        console.log(`[RevenueCat] Unhandled event type: ${type}`);
+        return res.status(200).json({ received: true });
+    }
+
+    if (Object.keys(update).length > 0) {
+      await User.findByIdAndUpdate(userId, { $set: update });
+      await invalidateMatchesCache(userId.toString(), "profile").catch(() => {});
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("[RevenueCat Webhook] Error:", err);
+    return res.status(500).json({ error: "Webhook processing failed" });
   }
+};
+
+// ─────────────────────────────────────────────────────────────────
+// Deprecated: left as stub to avoid 404s if still called
+// ─────────────────────────────────────────────────────────────────
+export const createCheckoutSession = async (_req, res) => {
+  return res.status(410).json({
+    error: "Web checkout is no longer supported. Please use the Unlock Me mobile app.",
+  });
+};
+
+export const verifyPaymentAndUpdateSubscription = async (_req, res) => {
+  return res.status(410).json({
+    error: "Web payments are no longer supported. Subscriptions are managed via RevenueCat.",
+  });
 };

@@ -1,7 +1,7 @@
 import { Queue } from "bullmq";
 import { bullMQConnection } from "../config/redis.js";
 
-const swipeActionQueue = new Queue("swipe-action-queue", {
+const unlockActionQueue = new Queue("unlock-action-queue", {
     connection: bullMQConnection,
     defaultJobOptions: {
         attempts: 3,
@@ -14,8 +14,8 @@ const swipeActionQueue = new Queue("swipe-action-queue", {
     },
 });
 
-export const addToSwipeActionQueue = async (data) => {
-    return swipeActionQueue.add("process-swipe-action", data);
+export const addTounlockActionQueue = async (data) => {
+    return unlockActionQueue.add("process-unlock-action", data);
 };
 
-export default swipeActionQueue;
+export default unlockActionQueue;

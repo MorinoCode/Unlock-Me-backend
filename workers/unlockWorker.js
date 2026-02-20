@@ -8,9 +8,9 @@ import {
 import { invalidateUserCaches } from "../utils/redisMatchHelper.js";
 import { bullMQConnection } from "../config/redis.js";
 
-const swipeWorkerHandler = async (job) => {
+const unlockWorkerHandler = async (job) => {
     const { userId, targetUserId, action, isMatch } = job.data;
-    console.log(`[SwipeWorker] ⚙️ Processing ${action} from ${userId} to ${targetUserId}`);
+    console.log(`[unlockWorker] ⚙️ Processing ${action} from ${userId} to ${targetUserId}`);
 
     try {
         const now = new Date();
@@ -19,8 +19,8 @@ const swipeWorkerHandler = async (job) => {
         let updateQuery = {};
         if (action === "left") {
             // ✅ Phase 4: Dislikes are Redis-only. We don't write them to MongoDB.
-            console.log(`[SwipeWorker] 🏎️ Skipping MongoDB write for Dislike from ${userId}`);
-            // Still update usage/lastSwipeDate below though
+            console.log(`[unlockWorker] 🏎️ Skipping MongoDB write for Dislike from ${userId}`);
+            // Still update usage/lastunlockDate below though
         } else {
             const updateField = action === "right" ? "likedUsers" : "superLikedUsers";
             updateQuery = { $addToSet: { [updateField]: targetUserId } };
@@ -31,9 +31,9 @@ const swipeWorkerHandler = async (job) => {
         }
         
         // Update my usage in DB (Eventually consistent)
-        updateQuery.$set = { "usage.lastSwipeDate": now };
+        updateQuery.$set = { "usage.lastunlockDate": now };
         // We still increment in DB for long-term tracking, even if API uses Redis for limits
-        updateQuery.$inc = { "usage.swipesCount": 1 };
+        updateQuery.$inc = { "usage.unlocksCount": 1 };
         if (action === "up") {
             updateQuery.$inc["usage.superLikesCount"] = 1;
         }
@@ -59,34 +59,34 @@ const swipeWorkerHandler = async (job) => {
             invalidateUserCache(userId),
             invalidateUserCache(targetUserId),
             invalidateUserCaches(userId),
-            invalidateMatchesCache(userId, "swipe"),
+            invalidateMatchesCache(userId, "unlock"),
             invalidateExploreCache(userId),
             ...invalidateCurrent,
             ...invalidateTarget,
-        ]).catch((err) => console.error("[SwipeWorker] Invalidation error:", err));
+        ]).catch((err) => console.error("[unlockWorker] Invalidation error:", err));
 
-        console.log(`✅ [SwipeWorker] Successfully persisted ${action} for ${userId}`);
+        console.log(`✅ [unlockWorker] Successfully persisted ${action} for ${userId}`);
         return { success: true };
 
     } catch (error) {
-        console.error(`❌ [SwipeWorker] PERSISTENCE FAILED for ${userId}: ${error.message}`);
+        console.error(`❌ [unlockWorker] PERSISTENCE FAILED for ${userId}: ${error.message}`);
         throw error;
     }
 };
 
-const swipeWorker = new Worker("swipe-action-queue", swipeWorkerHandler, {
+const unlockWorker = new Worker("unlock-action-queue", unlockWorkerHandler, {
     connection: bullMQConnection,
     concurrency: 10 // Higher concurrency as these are simple DB writes
 });
 
-swipeWorker.on("completed", () => {
-    // console.log(`[SwipeWorker] Job ${job.id} completed!`);
+unlockWorker.on("completed", () => {
+    // console.log(`[unlockWorker] Job ${job.id} completed!`);
 });
 
-swipeWorker.on("failed", (job, err) => {
-    console.error(`[SwipeWorker] Job ${job.id} failed: ${err.message}`);
+unlockWorker.on("failed", (job, err) => {
+    console.error(`[unlockWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("✅ [SwipeWorker] Worker Started & Listening...");
+console.log("✅ [unlockWorker] Worker Started & Listening...");
 
-export default swipeWorker;
+export default unlockWorker;

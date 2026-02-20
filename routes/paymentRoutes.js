@@ -5,25 +5,33 @@ import {
   cancelSubscription,
   changePlan,
   verifyPaymentAndUpdateSubscription,
+  revenueCatWebhook,
 } from "../controllers/paymentController/paymentController.js";
+
+import { verifySubscription } from "../controllers/paymentController/revenuecatController.js";
 
 import { protect, optionalProtect } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// دریافت پلن‌ها؛ اگر کاربر لاگین باشد ارز بر اساس کشور او انتخاب می‌شود، وگرنه از query.currency استفاده می‌شود
+// ✅ Static plan list for UI display (no Stripe)
 router.get("/plans", optionalProtect, getSubscriptionPlans);
 
-// روت قبلی: ساخت لینک پرداخت (حتماً باید لاگین باشد)
-router.post("/create-session", protect, createCheckoutSession);
+// ✅ RevenueCat webhook — called by RevenueCat on purchase/renewal/cancel/expiry
+// NO auth middleware — RevenueCat sends its own secret header
+router.post("/revenuecat-webhook", revenueCatWebhook);
 
-// Cancel subscription
+// ✅ Cancel subscription (DB-only, no Stripe)
 router.post("/cancel", protect, cancelSubscription);
 
-// Change plan
+// ✅ Change plan — redirects user to App Store / Google Play
 router.post("/change-plan", protect, changePlan);
 
-// Verify payment and update subscription (fallback if webhook fails)
+// ✅ Verify Native Mobile Subscription via RevenueCat
+router.post("/revenuecat/verify", protect, verifySubscription);
+
+// ─── Deprecated stubs (return 410 Gone) ─────────────────────────
+router.post("/create-session", protect, createCheckoutSession);
 router.post("/verify-session", protect, verifyPaymentAndUpdateSubscription);
 
 export default router;

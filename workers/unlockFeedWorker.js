@@ -8,7 +8,7 @@ import redisClient, { bullMQConnection } from "../config/redis.js";
 // Core Logic: Generate Feed (Same as before but optimized)
 export async function generateFeedForUser(currentUser) {
   try {
-      console.log(`[SwipeFeedWorker] 🔄 Generating feed for ${currentUser._id}...`);
+      console.log(`[unlockFeedWorker] 🔄 Generating feed for ${currentUser._id}...`);
       
       const excludedIds = [
           currentUser._id,
@@ -35,26 +35,26 @@ export async function generateFeedForUser(currentUser) {
 
       if (feed.length > 0) {
           const feedIds = feed.map(u => u._id.toString());
-          const feedKey = `swipe:feed:${currentUser._id}`;
+          const feedKey = `unlock:feed:${currentUser._id}`;
           
           // Push to Redis (Right side - Append)
           await redisClient.rPush(feedKey, feedIds);
-          console.log(`[SwipeFeedWorker] ✅ Added ${feed.length} users to feed for ${currentUser._id}`);
+          console.log(`[unlockFeedWorker] ✅ Added ${feed.length} users to feed for ${currentUser._id}`);
           return true;
       } else {
-          console.log(`[SwipeFeedWorker] ⚠️ No new users found for ${currentUser._id}`);
+          console.log(`[unlockFeedWorker] ⚠️ No new users found for ${currentUser._id}`);
           return false;
       }
   } catch (error) {
-      console.error(`[SwipeFeedWorker] ❌ Error generating feed:`, error);
+      console.error(`[unlockFeedWorker] ❌ Error generating feed:`, error);
       throw error; // Throw to let BullMQ know it failed
   }
 }
 
 // BullMQ Worker Processor
-const swipeFeedProcessor = async (job) => {
+const unlockFeedProcessor = async (job) => {
     const { userId } = job.data;
-    console.log(`[SwipeFeedWorker] ⚙️ Processing feed generation for ${userId}`);
+    console.log(`[unlockFeedWorker] ⚙️ Processing feed generation for ${userId}`);
     
     // Fetch user details needed for feed generation
     const user = await User.findById(userId).select(
@@ -66,11 +66,11 @@ const swipeFeedProcessor = async (job) => {
     }
 
     await generateFeedForUser(user);
-    console.log(`[SwipeFeedWorker] ✅ Job ${job.id} completed`);
+    console.log(`[unlockFeedWorker] ✅ Job ${job.id} completed`);
 };
 
 // Initialize Worker
-const swipeFeedWorker = new Worker("swipe-feed", swipeFeedProcessor, {
+const unlockFeedWorker = new Worker("unlock-feed", unlockFeedProcessor, {
     connection: bullMQConnection,
     concurrency: 5, // reasonable concurrency for feed generation
     limiter: {
@@ -79,15 +79,15 @@ const swipeFeedWorker = new Worker("swipe-feed", swipeFeedProcessor, {
     },
 });
 
-swipeFeedWorker.on("completed", () => {
-    // console.log(`[SwipeFeedWorker] Job ${job.id} done`);
+unlockFeedWorker.on("completed", () => {
+    // console.log(`[unlockFeedWorker] Job ${job.id} done`);
 });
 
-swipeFeedWorker.on("failed", (job, err) => {
-    console.error(`[SwipeFeedWorker] Job ${job.id} failed: ${err.message}`);
+unlockFeedWorker.on("failed", (job, err) => {
+    console.error(`[unlockFeedWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("✅ [SwipeFeedWorker] Worker Started & Listening requires 'swipe-feed' queue...");
+console.log("✅ [unlockFeedWorker] Worker Started & Listening requires 'unlock-feed' queue...");
 
-export default swipeFeedWorker;
+export default unlockFeedWorker;
 

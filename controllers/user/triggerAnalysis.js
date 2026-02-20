@@ -1,6 +1,6 @@
 import { analysisQueue } from "../../config/queue.js";
 
-// Trigger workers (Analysis + Swipe) for Analysis Page via Queue
+// Trigger workers (Analysis + unlock) for Analysis Page via Queue
 export const triggerAnalysisWorkers = async (req, res) => {
   try {
     const userId = req.user.userId;

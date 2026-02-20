@@ -56,7 +56,7 @@ export const getUserById = async (req, res) => {
     }
 
     const user = await User.findById(req.params.userId).select(
-      "name username email avatar bio location phone detailedAddress gallery gender lookingFor questionsbycategoriesResults subscription birthday voiceIntro"
+      "name username email avatar bio location phone detailedAddress gallery gender lookingFor questionsbycategoriesResults subscription birthday voiceIntro verification"
     ).lean();
     if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -92,7 +92,7 @@ export const getUserInformation = async (req, res) => {
     if (!req.user) return res.status(200).json(null);
 
     const user = await User.findById(req.user.userId || req.user.id).select(
-      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro likedBy likedUsers dislikedUsers superLikedUsers superLikedBy blockedUsers blockedBy usage potentialMatches lastMatchCalculation"
+      "name username dna avatar bio location gallery gender lookingFor subscription birthday interests questionsbycategoriesResults voiceIntro verification likedBy likedUsers dislikedUsers superLikedUsers superLikedBy blockedUsers blockedBy usage potentialMatches lastMatchCalculation"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
@@ -176,7 +176,7 @@ export const updateProfileInfo = async (req, res) => {
       { new: true, runValidators: true }
     ).select("-password");
 
-    // ✅ Invalidate caches so Explore/Swipe and my profile show fresh data
+    // ✅ Invalidate caches so Explore/unlock and my profile show fresh data
     const { invalidateUserCache, invalidateExploreCache } = await import("../../utils/cacheHelper.js");
     const { invalidateMatchesCache } = await import("../../utils/cacheHelper.js");
     const { invalidateUserCaches } = await import("../../utils/redisMatchHelper.js");

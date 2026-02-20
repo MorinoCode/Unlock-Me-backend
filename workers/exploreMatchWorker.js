@@ -69,6 +69,7 @@ export async function generateAnalysisData(userId) {
       gender: 1,
       interests: 1,
       isVerified: 1,
+      verification: 1,
       createdAt: 1
     };
 
@@ -248,6 +249,7 @@ export async function findMatchesForUser(currentUser) {
           gender: 1,
           createdAt: 1,
           isVerified: 1,
+          verification: 1,
           dna: 1, // Need DNA for scoring
           questionsbycategoriesResults: 1
         }
@@ -346,7 +348,7 @@ export async function findMatchesForSection(currentUser, section, limit = 50) {
 
         // Fetch Candidates
         const candidates = await User.find(query)
-            .select("dna location lookingFor name interests birthday gender subscription questionsbycategoriesResults createdAt avatar bio isVerified")
+            .select("dna location lookingFor name interests birthday gender subscription questionsbycategoriesResults createdAt avatar bio isVerified verification")
             .sort(sort)
             .limit(limit * 2) // Fetch double to allow for post-filtering
             .lean();

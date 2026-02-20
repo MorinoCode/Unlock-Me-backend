@@ -7,7 +7,7 @@ import {
 } from "../../utils/matchUtils.js";
 // import { emitNotification } from "../../utils/notificationHelper.js";
 import {
-  getSwipeLimit,
+  getunlockLimit,
   // getSuperLikeLimit,
   // getVisibilityThreshold,
 } from "../../utils/subscriptionRules.js";
@@ -18,9 +18,9 @@ import {
   // invalidateUserCache,
 } from "../../utils/cacheHelper.js";
 import redisClient from "../../config/redis.js";
-import { addToSwipeFeedQueue } from "../../queues/swipeFeedQueue.js";
+import { addTounlockFeedQueue } from "../../queues/unlockFeedQueue.js";
 
-export const getSwipeCards = async (req, res) => {
+export const getunlockCards = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.userId;
     const me = await User.findById(currentUserId);
@@ -30,35 +30,35 @@ export const getSwipeCards = async (req, res) => {
     }
 
     // ✅ NEW ARCHITECTURE: Fetch from Redis feed instead of live aggregation
-    const feedKey = `swipe:feed:${currentUserId}`;
-    console.log(`[SwipeCards] Checking Redis feed: ${feedKey}`);
+    const feedKey = `unlock:feed:${currentUserId}`;
+    console.log(`[unlockCards] Checking Redis feed: ${feedKey}`);
 
     let feedIds = await redisClient.lRange(feedKey, 0, 19); // Get first 20 IDs
-    console.log(`[SwipeCards] Feed IDs from Redis: ${feedIds.length}`);
+    console.log(`[unlockCards] Feed IDs from Redis: ${feedIds.length}`);
 
     // If feed is empty or low, trigger refill via BULLMQ
     if (feedIds.length < 20) { // Threshold 20
-      console.log(`⚠️ [SwipeCards] Feed LOW/EMPTY (${feedIds.length} < 20). Triggering refill job...`);
+      console.log(`⚠️ [unlockCards] Feed LOW/EMPTY (${feedIds.length} < 20). Triggering refill job...`);
       // Trigger Queue Job
-      addToSwipeFeedQueue(currentUserId, true).catch(err => 
+      addTounlockFeedQueue(currentUserId, true).catch(err => 
         console.error(`Queue add failed for ${currentUserId}:`, err)
       );
       
       // If completely empty, wait briefly for worker to process
       if (feedIds.length === 0) {
-        console.log(`[SwipeCards] Feed completely empty. Waiting 2s for worker...`);
+        console.log(`[unlockCards] Feed completely empty. Waiting 2s for worker...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
         feedIds = await redisClient.lRange(feedKey, 0, 19);
-        console.log(`[SwipeCards] After wait, feed size: ${feedIds.length}`);
+        console.log(`[unlockCards] After wait, feed size: ${feedIds.length}`);
       }
     } else {
-      console.log(`✅ [SwipeCards] Feed OK (${feedIds.length} users available)`);
+      console.log(`✅ [unlockCards] Feed OK (${feedIds.length} users available)`);
     }
 
     // If still no feed (new user or error), return empty
     if (feedIds.length === 0) {
-      console.error(`❌ [SwipeCards] NO FEED AVAILABLE for ${currentUserId}!`);
-      console.error(`❌ [SwipeCards] Possible причины:`);
+      console.error(`❌ [unlockCards] NO FEED AVAILABLE for ${currentUserId}!`);
+      console.error(`❌ [unlockCards] Possible причины:`);
       console.error(`   1. Worker not run during signup`);
       console.error(`   2. Redis connection issue`);
       console.error(`   3. No users in database match criteria`);
@@ -69,19 +69,19 @@ export const getSwipeCards = async (req, res) => {
       });
     }
 
-    console.log(`[SwipeCards] Fetching ${feedIds.length} user details from MongoDB...`);
+    console.log(`[unlockCards] Fetching ${feedIds.length} user details from MongoDB...`);
     const candidates = await User.find({ _id: { $in: feedIds } })
       .select("name birthday avatar gallery bio gender location voiceIntro interests dna isVerified")
       .lean();
 
-    console.log(`[SwipeCards] Fetched ${candidates.length} users from DB`);
+    console.log(`[unlockCards] Fetched ${candidates.length} users from DB`);
 
     // Preserve order from Redis feed
     const orderedCandidates = feedIds
       .map(id => candidates.find(c => c._id.toString() === id))
       .filter(Boolean);
 
-    console.log(`[SwipeCards] Ordered candidates: ${orderedCandidates.length}`);
+    console.log(`[unlockCards] Ordered candidates: ${orderedCandidates.length}`);
 
     // ✅ Performance Optimization: Create Set of unlocked strings for O(1) lookup
     const unlockedSet = new Set((me.unlockedProfiles || []).map(id => id.toString()));
@@ -167,11 +167,11 @@ export const getSwipeCards = async (req, res) => {
 
 
     // ✅ Performance Fix: Cache the results
-    await setMatchesCache(currentUserId, "swipe", enrichedCards, 180); // 3 minutes
+    await setMatchesCache(currentUserId, "unlock", enrichedCards, 180); // 3 minutes
 
     res.status(200).json(enrichedCards);
   } catch (error) {
-    console.error("Get Swipe Cards Error:", error);
+    console.error("Get unlock Cards Error:", error);
     const errorMessage =
       process.env.NODE_ENV === "production"
         ? "Server error. Please try again later."
@@ -180,9 +180,9 @@ export const getSwipeCards = async (req, res) => {
   }
 };
 
-import { addToSwipeActionQueue } from "../../queues/swipeActionQueue.js";
+import { addTounlockActionQueue } from "../../queues/unlockActionQueue.js";
 
-export const handleSwipeAction = async (req, res) => {
+export const handleunlockAction = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.userId;
     const { targetUserId, action } = req.body;
@@ -207,21 +207,21 @@ export const handleSwipeAction = async (req, res) => {
         currentUserData.superLikedUsers?.some(id => id.toString() === targetUserId);
     
     if (alreadyInteract && action !== 'skip') {
-         return res.status(400).json({ message: "Already swiped" });
+         return res.status(400).json({ message: "Already unlockd" });
     }
 
     // --- LIMITS (simplified for speed) ---
     const userPlan = currentUserData.subscription?.plan || "free";
-    const swipeLimit = getSwipeLimit(userPlan);
+    const unlockLimit = getunlockLimit(userPlan);
     // const superLikeLimit = getSuperLikeLimit(userPlan);
     
     // Check usage simply
     // Ideally this logic moves to Redis for strict high-scale enforcement
     // For now, we trust the localized read.
-    const swipesToday = currentUserData.usage?.swipesCount || 0;
+    const unlocksToday = currentUserData.usage?.unlocksCount || 0;
     
     if (action === 'right' || action === 'left') {
-        if (swipeLimit !== Infinity && swipesToday >= swipeLimit) {
+        if (unlockLimit !== Infinity && unlocksToday >= unlockLimit) {
              return res.status(403).json({ error: "Limit Reached", message: "Daily limit reached" });
         }
     }
@@ -252,7 +252,7 @@ export const handleSwipeAction = async (req, res) => {
 
     // 3. ASYNC PROCESSING (Queue)
     // Offload the heavy writes (Transaction, Updates, Cache Invalidation) to Worker
-    await addToSwipeActionQueue({
+    await addTounlockActionQueue({
         userId: currentUserId,
         targetUserId,
         action,
@@ -261,8 +261,8 @@ export const handleSwipeAction = async (req, res) => {
 
     // 4. Redis Feed Cleanup (Shared)
     try {
-      const feedKey = `swipe:feed:${currentUserId}`;
-      const historyKey = `swipe:history:${currentUserId}`;
+      const feedKey = `unlock:feed:${currentUserId}`;
+      const historyKey = `unlock:history:${currentUserId}`;
       await redisClient.lRem(feedKey, 1, targetUserId.toString());
       await redisClient.sAdd(historyKey, targetUserId.toString());
       await redisClient.expire(historyKey, 7 * 24 * 60 * 60);
@@ -270,7 +270,7 @@ export const handleSwipeAction = async (req, res) => {
       // Auto-refill check (Fire & Forget)
       const len = await redisClient.lLen(feedKey);
       if (len < 20) {
-           addToSwipeFeedQueue(currentUserId, false).catch(() => {});
+           addTounlockFeedQueue(currentUserId, false).catch(() => {});
       }
     } catch (e) {
         console.error("Redis feed update error", e);
@@ -283,12 +283,12 @@ export const handleSwipeAction = async (req, res) => {
       matchDetails,
       updatedUsage: {
           // Return optimistic usage for frontend counter
-          swipesCount: swipesToday + 1
+          unlocksCount: unlocksToday + 1
       }
     });
 
   } catch (error) {
-    console.error("Swipe Action Error:", error);
+    console.error("unlock Action Error:", error);
     res.status(500).json({ message: "Server Error" });
   }
 };

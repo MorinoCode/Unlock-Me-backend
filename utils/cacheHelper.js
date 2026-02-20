@@ -9,7 +9,7 @@ const CACHE_PREFIXES = {
   USER: "user",
   MATCHES: "matches",
   EXPLORE: "explore",
-  SWIPE: "swipe",
+  unlock: "unlock",
   APP: "app",
 };
 
@@ -104,8 +104,8 @@ export const invalidateUserCache = async (userId) => {
 };
 
 /**
- * Invalidate matches cache for a user and type (e.g. "swipe", "explore_overview_1").
- * Call after swipe action so next getSwipeCards returns fresh cards.
+ * Invalidate matches cache for a user and type (e.g. "unlock", "explore_overview_1").
+ * Call after unlock action so next getunlockCards returns fresh cards.
  */
 export const invalidateMatchesCache = async (userId, type) => {
   if (!redisClient || !redisClient.isOpen) return;

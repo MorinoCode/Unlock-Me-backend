@@ -59,6 +59,8 @@ export const signinUser = async (req, res) => {
         id: user._id,
         name: user.name,
       },
+      accessToken,
+      refreshToken,
     });
   } catch (err) {
     console.error("Signin Error:", err);

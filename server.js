@@ -149,6 +149,9 @@ const allowedOrigins = [
   "https://unlock-me.app",
   "https://www.unlock-me.app",
   "http://192.168.8.124:5173",
+  "https://localhost",          // ✅ Critical Fix: For Android Capacitor
+  "http://localhost",           // ✅ For Android Emulators
+  "capacitor://localhost"
 ];
 
 const corsOptions = {

@@ -115,7 +115,8 @@ export const signupUser = async (req, res) => {
     
     res.status(201).json({
       message: "User registered successfully",
-      token: accessToken, // Assuming 'token' refers to accessToken
+      accessToken,
+      refreshToken,
       user: {
         id: newUser._id,
         name: newUser.name,

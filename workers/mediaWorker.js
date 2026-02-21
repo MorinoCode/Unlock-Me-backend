@@ -63,7 +63,12 @@ const workerHandler = async (job) => {
 
       const uploadPromise = new Promise((resolve, reject) => {
         cloudinary.uploader.upload_stream(
-          { resource_type: "video", folder: "unlock_me_voices", public_id: `voice_${userId}_${Date.now()}` },
+          { 
+            resource_type: "video", // Keep as 'video' to correctly process mp4 containers
+            folder: "unlock_me_voices", 
+            public_id: `voice_${userId}_${Date.now()}`,
+            format: "mp3" // Convert to MP3 for universal compatibility
+          },
           (error, result) => error ? reject(error) : resolve(result)
         ).end(audioBuffer);
       });

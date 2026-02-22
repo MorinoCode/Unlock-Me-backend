@@ -53,6 +53,7 @@ import "./workers/unlockWorker.js"; // ✅ NEW: High-Scale unlock Worker
 import "./workers/notificationWorker.js"; // ✅ NEW: Enterprise Notification Worker
 import "./workers/mediaWorker.js"; // ✅ NEW: Enterprise Media Worker
 import "./workers/onboardingWorker.js"; // ✅ NEW: Enterprise Onboarding Worker
+import "./workers/revenueCatWorker.js"; // ✅ NEW: Async RevenueCat Webhook Processor
 
 
 import { Worker } from "worker_threads";

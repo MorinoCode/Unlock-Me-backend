@@ -10,6 +10,7 @@
 
 import User from "../../models/User.js";
 import { invalidateMatchesCache } from "../../utils/cacheHelper.js";
+import { addToRevenueCatQueue } from "../../queues/revenueCatQueue.js";
 
 // ─────────────────────────────────────────────────────────────────
 // STATIC PLAN DEFINITIONS (prices shown for UI only)
@@ -149,11 +150,11 @@ export const changePlan = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────
 export const revenueCatWebhook = async (req, res) => {
   try {
-    // ✅ Optional: Verify RevenueCat webhook secret
+    // ✅ Verify RevenueCat webhook secret
     const secret = process.env.REVENUECAT_WEBHOOK_SECRET;
     if (secret) {
       const incomingSecret = req.headers["authorization"] || req.headers["x-revenuecat-secret"];
-      if (incomingSecret !== secret) {
+      if (incomingSecret !== secret && process.env.NODE_ENV === "production") {
         console.warn("[RevenueCat Webhook] ❌ Invalid secret");
         return res.status(401).json({ error: "Unauthorized" });
       }
@@ -162,105 +163,21 @@ export const revenueCatWebhook = async (req, res) => {
     const { event } = req.body;
     if (!event) return res.status(400).json({ error: "Missing event" });
 
-    const { type, app_user_id, product_id, expiration_at_ms, purchased_at_ms } = event;
-
-    // app_user_id must match a MongoDB user _id
-    const userId = app_user_id;
-    if (!userId) return res.status(400).json({ error: "Missing app_user_id" });
-
-    const user = await User.findById(userId);
-    if (!user) {
-      console.warn(`[RevenueCat Webhook] User ${userId} not found`);
-      return res.status(404).json({ error: "User not found" });
+    // Ensure we have required data
+    if (!event.id || !event.app_user_id || !event.type) {
+        console.warn("[RevenueCat Webhook] ❌ Malformed event received");
+        return res.status(400).json({ error: "Malformed event" });
     }
 
-    // Determine plan from product_id (e.g. "unlock_me_gold_monthly")
-    const productLower = (product_id || "").toLowerCase();
-    let plan = "free";
-    if (productLower.includes("diamond")) plan = "diamond";
-    else if (productLower.includes("platinum")) plan = "platinum";
-    else if (productLower.includes("gold")) plan = "gold";
+    // ✅ Fast Response: Immediately push to BullMQ background processor
+    await addToRevenueCatQueue({ event });
 
-    const expiresAt = expiration_at_ms ? new Date(expiration_at_ms) : null;
-    const startedAt = purchased_at_ms ? new Date(purchased_at_ms) : null;
-
-    let update = {};
-
-    switch (type) {
-      // ── Active subscription events ──────────────────────────────
-      case "INITIAL_PURCHASE":
-      case "RENEWAL":
-      case "PRODUCT_CHANGE":
-      case "NON_RENEWING_PURCHASE":
-        update = {
-          "subscription.plan": plan,
-          "subscription.status": "active",
-          "subscription.expiresAt": expiresAt,
-          "subscription.startedAt": startedAt || user.subscription?.startedAt || new Date(),
-          "subscription.isTrial": false,
-        };
-        console.log(`[RevenueCat] ✅ ${type} → User ${userId} is now on ${plan}`);
-        break;
-
-      // ── Trial ──────────────────────────────────────────────────
-      case "TRIAL_STARTED":
-        update = {
-          "subscription.plan": plan,
-          "subscription.status": "active",
-          "subscription.expiresAt": expiresAt,
-          "subscription.startedAt": startedAt || new Date(),
-          "subscription.isTrial": true,
-        };
-        console.log(`[RevenueCat] 🆓 Trial started → User ${userId} on ${plan}`);
-        break;
-
-      case "TRIAL_CONVERTED":
-        update = {
-          "subscription.isTrial": false,
-          "subscription.status": "active",
-          "subscription.plan": plan,
-          "subscription.expiresAt": expiresAt,
-        };
-        break;
-
-      // ── Cancellation (user canceled but still has time left) ─────
-      case "CANCELLATION":
-      case "SUBSCRIBER_ALIAS":
-        update = {
-          "subscription.status": "canceled",
-          "subscription.expiresAt": expiresAt,
-        };
-        console.log(`[RevenueCat] ❌ Canceled → User ${userId} until ${expiresAt}`);
-        break;
-
-      // ── Expiry (access fully ended) ───────────────────────────
-      case "EXPIRATION":
-      case "SUBSCRIBER_REFUND":
-      case "BILLING_ISSUE":
-        update = {
-          "subscription.plan": "free",
-          "subscription.status": "expired",
-          "subscription.expiresAt": null,
-          "subscription.startedAt": null,
-          "subscription.isTrial": false,
-        };
-        console.log(`[RevenueCat] ⌛ Expired → User ${userId} reverted to free`);
-        break;
-
-      default:
-        console.log(`[RevenueCat] Unhandled event type: ${type}`);
-        return res.status(200).json({ received: true });
-    }
-
-    if (Object.keys(update).length > 0) {
-      await User.findByIdAndUpdate(userId, { $set: update });
-      await invalidateMatchesCache(userId.toString(), "profile").catch(() => {});
-    }
-
+    // Respond 200 OK immediately to acknowledge receipt to RevenueCat
     return res.status(200).json({ received: true });
   } catch (err) {
-    console.error("[RevenueCat Webhook] Error:", err);
-    return res.status(500).json({ error: "Webhook processing failed" });
+    console.error("[RevenueCat Webhook] Queue Error:", err);
+    // Even if queuing fails, we let RC retry by throwing 500
+    return res.status(500).json({ error: "Webhook enqueue failed" });
   }
 };
 

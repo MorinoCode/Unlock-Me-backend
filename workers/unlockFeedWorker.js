@@ -16,6 +16,7 @@ export async function generateFeedForUser(currentUser) {
           ...(currentUser.likedUsers || []),
           ...(currentUser.dislikedUsers || []),
           ...(currentUser.blockedUsers || []),
+          ...(currentUser.blockedBy || []),
           ...(currentUser.superLikedUsers || []) // Added superLikedUsers
       ];
 
@@ -58,7 +59,7 @@ const unlockFeedProcessor = async (job) => {
     
     // Fetch user details needed for feed generation
     const user = await User.findById(userId).select(
-        "location lookingFor matches likedUsers dislikedUsers superLikedUsers blockedUsers"
+        "location lookingFor matches likedUsers dislikedUsers superLikedUsers blockedUsers blockedBy"
     ).lean();
 
     if (!user) {

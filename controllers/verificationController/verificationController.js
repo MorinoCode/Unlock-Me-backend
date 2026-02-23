@@ -22,7 +22,7 @@ export const requestVerification = async (req, res) => {
       { 
         resource_type: "video", 
         folder: "verifications",
-        moderation: "aws_rekognition_video_moderation", // ✅ Scale Optimization: AI video moderation
+        // ✅ Removed aws_rekognition_video_moderation as user requested manual admin review
         // ✅ Scale Optimization: Force compression to save bandwidth and storage
         transformation: [
           { width: 720, crop: "limit" },

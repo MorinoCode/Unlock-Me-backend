@@ -25,21 +25,7 @@ export const signupUser = async (req, res) => {
       return res.status(400).json({ message: "This username is not allowed (Reserved word)." });
     }
 
-    // 3. چک کردن تکراری بودن (می‌توانیم با Promise.all سرعت را بالا ببریم)
-    // اینجوری هر دو چک همزمان انجام می‌شوند نه پشت سر هم
-    const [existingEmail, existingUsername] = await Promise.all([
-      User.findOne({ email }),
-      User.findOne({ username })
-    ]);
-
-    if (existingEmail) {
-      return res.status(400).json({ message: "Email already exists" });
-    }
-    if (existingUsername) {
-      return res.status(400).json({ message: "Username already exists" });
-    }
-
-    // 4. هش کردن پسورد
+    // 3. هش کردن پسورد
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
@@ -64,20 +50,37 @@ export const signupUser = async (req, res) => {
       },
     });
 
-    await newUser.save();
+    try {
+      await newUser.save();
+    } catch (saveError) {
+      // ✅ 1M Scale Security Fix: Atomic Duplicate Checking
+      // Instead of querying first (which can cause a race condition if 2 requests come at the exact same millisecond),
+      // we let MongoDB enforce the uniqueness atomically and catch the specific Error Code 11000.
+      if (saveError.code === 11000) {
+        if (saveError.keyPattern && saveError.keyPattern.email) {
+          return res.status(400).json({ message: "Email already exists" });
+        }
+        if (saveError.keyPattern && saveError.keyPattern.username) {
+          return res.status(400).json({ message: "Username already exists" });
+        }
+        return res.status(400).json({ message: "Account already exists with these credentials." });
+      }
+      throw saveError; // Re-throw if it's not a duplicate key error
+    }
 
     // ✅ Security Fix: Shorter token expiration + refresh token
     // Access token: 1 hour (was 7 days)
     const accessToken = jwt.sign(
       { userId: newUser._id, role: newUser.role, username: newUser.username, type: 'access' },
       process.env.JWT_SECRET,
-      { expiresIn: "1h" }
+      { expiresIn: "15m" } // ✅ Security Fix: Ultra-short access token
     );
     
     // Refresh token: 7 days
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
     const refreshToken = jwt.sign(
       { userId: newUser._id, type: 'refresh' },
-      process.env.JWT_SECRET,
+      refreshSecret,
       { expiresIn: "7d" }
     );
     
@@ -94,7 +97,7 @@ export const signupUser = async (req, res) => {
       secure: isProduction, 
       sameSite: "lax", 
       domain: isProduction ? ".unlock-me.app" : undefined, 
-      maxAge: 60 * 60 * 1000, // 1 hour
+      maxAge: 15 * 60 * 1000, // 15 minutes
     });
     
     // ✅ Security Fix: Set refresh token cookie (7 days)

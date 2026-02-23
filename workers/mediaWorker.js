@@ -28,6 +28,7 @@ const workerHandler = async (job) => {
       const uploadRes = await cloudinary.uploader.upload(avatarBase64, {
         folder: "unlock_me_avatars",
         transformation: [{ width: 500, height: 500, crop: "fill" }],
+        format: "jpg", // ✅ Force JPG so AWS Rekognition works (it skips webp)
         moderation: "aws_rek", // ✅ Correct Cloudinary flag for AWS Rekognition
       });
       console.log(`[MediaWorker] Cloudinary upload success for ${userId}. Moderation length:`, uploadRes.moderation?.length);
@@ -89,6 +90,7 @@ const workerHandler = async (job) => {
             const uploadRes = await cloudinary.uploader.upload(img, {
               folder: "unlock_me_gallery",
               transformation: [{ width: 800, crop: "limit" }],
+              format: "jpg", // ✅ Force JPG so AWS Rekognition works
               moderation: "aws_rek", // ✅ Correct Cloudinary flag for AWS Rekognition
             });
 

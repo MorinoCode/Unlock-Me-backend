@@ -18,22 +18,11 @@ export const handleCloudinaryWebhook = async (req, res) => {
        if (item.moderation_status === "rejected") {
            console.log(`[Webhook] 🚨 Image REJECTED by AI: ${item.public_id}`);
            
-           // 1. Delete from Cloudinary (Enforce clean up)
+           // 1. Delete from Cloudinary
            await cloudinary.uploader.destroy(item.public_id);
 
-           // 2. Find User associated with this image
-           // Profile Avatar & Gallery images are stored with specific path patterns
-           // Avatar usually: unlock_me_avatars/[random_id]
-           // Gallery: unlock_me_gallery/[random_id]
-           
-           // Strategy: Search User who has this string in their avatar or gallery
-           // We search for the *full URL* match part because DB has full URL. 
-           // Cloudinary public_id "unlock_me_avatars/xyz" matches URL ".../unlock_me_avatars/xyz.jpg"
-           
-           // NOTE: public_id does not have extension. DB URL has extension. 
-           // Regex match: url contains public_id
+           // 2. Find user by URL match (DB stores full URL, public_id has no extension)
            const regex = new RegExp(item.public_id);
-           
            const user = await User.findOne({
                $or: [
                    { avatar: { $regex: regex } },
@@ -46,11 +35,13 @@ export const handleCloudinaryWebhook = async (req, res) => {
                
                let notifyUser = false;
                let updateData = {};
+               let mediaType = "UPLOAD_GALLERY";
 
                // Check Avatar
                if (user.avatar && user.avatar.includes(item.public_id)) {
-                   updateData.avatar = "https://res.cloudinary.com/dsm2vj701/image/upload/v1700000000/default-avatar.png"; // Fallback to default
+                   updateData.avatar = "https://res.cloudinary.com/dsm2vj701/image/upload/v1700000000/default-avatar.png";
                    notifyUser = true;
+                   mediaType = "UPLOAD_AVATAR";
                }
 
                // Check Gallery
@@ -62,10 +53,18 @@ export const handleCloudinaryWebhook = async (req, res) => {
                if (notifyUser) {
                    await User.findByIdAndUpdate(user._id, { $set: updateData });
                    
-                   // Real-time Notification
+                   // Invalidate caches so frontend gets fresh data on next checkAuth
+                   const { invalidateUserCache, invalidateMatchesCache } = await import("../../utils/cacheHelper.js");
+                   await Promise.all([
+                     invalidateUserCache(user._id),
+                     invalidateMatchesCache(user._id, "profile_full")
+                   ]).catch(() => {});
+
+                   // Real-time Notification to frontend
                    await redisClient.publish("job-events", JSON.stringify({
                         type: "MEDIA_REJECTED",
                         userId: user._id.toString(),
+                        mediaType,
                         reason: "Image was rejected by automated moderation.",
                         notes: "Your image has been removed for violating community guidelines."
                    }));
@@ -74,8 +73,42 @@ export const handleCloudinaryWebhook = async (req, res) => {
            } else {
                console.warn(`[Webhook] ⚠️ No user found for public_id: ${item.public_id}`);
            }
+       } else if (item.moderation_status === "approved") {
+           // ✅ NEW: Notify frontend of approval so it shows success toast & refreshes avatar
+           console.log(`[Webhook] ✅ Image APPROVED by AWS: ${item.public_id}`);
+
+           const regex = new RegExp(item.public_id);
+           const user = await User.findOne({
+               $or: [
+                   { avatar: { $regex: regex } },
+                   { gallery: { $regex: regex } }
+               ]
+           });
+
+           if (user) {
+               const isAvatar = user.avatar && user.avatar.includes(item.public_id);
+               const mediaType = isAvatar ? "UPLOAD_AVATAR" : "UPLOAD_GALLERY";
+               
+               console.log(`[Webhook] 🎉 Emitting MEDIA_PROCESSED for user ${user._id} (${mediaType})`);
+
+               // Invalidate caches so checkAuth() returns fresh data with the new avatar
+               const { invalidateUserCache, invalidateMatchesCache } = await import("../../utils/cacheHelper.js");
+               await Promise.all([
+                 invalidateUserCache(user._id),
+                 invalidateMatchesCache(user._id, "profile_full")
+               ]).catch(() => {});
+
+               // Emit success to frontend — this triggers the toast in SocketProvider
+               await redisClient.publish("job-events", JSON.stringify({
+                   type: "MEDIA_PROCESSED",
+                   userId: user._id.toString(),
+                   mediaType,
+                   payload: {}
+               }));
+           }
        } else {
-           console.log(`[Webhook] ✅ Image approved: ${item.public_id}`);
+           // "pending" or other statuses — do nothing, wait for next webhook call
+           console.log(`[Webhook] ⏳ Moderation pending for: ${item.public_id}`);
        }
     }
 

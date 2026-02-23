@@ -627,3 +627,44 @@ export const getMatchesDashboard = async (req, res) => {
     res.status(500).json({ message: errorMessage });
   }
 };
+
+// --- Export User Data (GDPR Right to Portability) ---
+export const exportUserData = async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+
+    // 1. Fetch User Data
+    const user = await User.findById(userId).lean();
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Remove highly sensitive internal fields before export
+    delete user.password;
+    delete user.refreshToken;
+
+    // 2. Fetch User Posts
+    const posts = await Post.find({ author: userId }).lean();
+
+    // 3. Compile Data
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      userInfo: user,
+      activity: {
+        posts: posts
+      }
+    };
+
+    // 4. Send as downloaded JSON file
+    res.setHeader('Content-disposition', `attachment; filename=unlock-me-data-${userId}.json`);
+    res.setHeader('Content-type', 'application/json');
+    res.status(200).send(JSON.stringify(exportData, null, 2));
+
+  } catch (error) {
+    console.error("Export Data Error:", error);
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ error: errorMessage });
+  }
+};

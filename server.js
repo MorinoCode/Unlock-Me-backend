@@ -34,6 +34,7 @@ import paymentRoutes from "./routes/paymentRoutes.js";
 import goDateRoutes from "./routes/goDateRoutes.js";
 import contactRoutes from "./routes/contactRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js"; // ✅ NEW: Isolated Admin Routes
+import seoRoutes from "./routes/seoRoutes.js"; // ✅ NEW: Dynamic Sitemap Generation
 
 import { handleSocketConnection } from "./sockets/socketHandler.js";
 
@@ -250,8 +251,8 @@ const sanitizeRequest = (obj) => {
   }
 
   for (const key in obj) {
-    // 1. امنیت: حذف کلیدهایی که با $ شروع می‌شوند
-    if (/^\$/.test(key)) {
+    // 1. امنیت: حذف کلیدهایی که با $ شروع می‌شوند و جلوگیری از Prototype Pollution
+    if (/^\$/.test(key) || key === '__proto__' || key === 'constructor' || key === 'prototype') {
       delete obj[key];
       continue;
     }
@@ -341,7 +342,9 @@ io.use((socket, next) => {
       // If access token failed, try refresh token secret
       const refreshToken = cookies["unlock-me-refresh-token"];
       if (refreshToken) {
-        decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+        // Fallback to refresh token if no access token
+        const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+        decoded = jwt.verify(refreshToken, refreshSecret);
       } else {
         return next(new Error("Invalid token"));
       }
@@ -387,7 +390,8 @@ app.use("/api/payment", paymentRoutes);
 app.use("/api/blind-date", blindDateRoutes);
 app.use("/api/go-date", goDateRoutes);
 app.use("/api/contact", contactRoutes);
-app.use("/api/admin", adminRoutes); // ✅ NEW: Admin endpoints
+app.use("/api/admin", adminRoutes);
+app.use("/api/seo", seoRoutes); // ✅ NEW: Admin endpoints
 
 app.get("/ping", (req, res) => {
   res.status(200).send("pong 🏓");

@@ -107,7 +107,7 @@ export const createGoDate = async (req, res) => {
       const uploadResponse = await cloudinary.uploader.upload(dataURI, {
         folder: "go_dates",
         format: "webp",
-        moderation: "aws_rekognition_ai_moderation", // ✅ AI Moderation
+        moderation: "aws_rek", // ✅ Correct Cloudinary flag for AWS Rekognition
         transformation: [{ width: 800, height: 600, crop: "fill" }],
       });
       

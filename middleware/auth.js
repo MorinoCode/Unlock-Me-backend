@@ -32,7 +32,8 @@ export const protect = async (req, res, next) => {
         // If access token expired, try refresh token
         if (tokenError.name === 'TokenExpiredError' && refreshToken) {
           try {
-            const refreshDecoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+            const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+            const refreshDecoded = jwt.verify(refreshToken, refreshSecret);
             if (refreshDecoded.type !== 'refresh') {
               throw new Error("Invalid refresh token type");
             }
@@ -46,7 +47,7 @@ export const protect = async (req, res, next) => {
             const newAccessToken = jwt.sign(
               { userId: user._id, role: user.role, username: user.username, type: 'access' },
               process.env.JWT_SECRET,
-              { expiresIn: "1h" }
+              { expiresIn: "15m" }
             );
             
             const isProduction = process.env.NODE_ENV === "production";
@@ -55,7 +56,7 @@ export const protect = async (req, res, next) => {
               secure: isProduction,
               sameSite: "lax",
               domain: isProduction ? ".unlock-me.app" : undefined,
-              maxAge: 60 * 60 * 1000, // 1 hour
+              maxAge: 15 * 60 * 1000, // 15 minutes
             });
             
             decoded = { userId: user._id };
@@ -71,7 +72,8 @@ export const protect = async (req, res, next) => {
       }
     } else {
       // No access token, try refresh token
-      const refreshDecoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+      const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+      const refreshDecoded = jwt.verify(refreshToken, refreshSecret);
       if (refreshDecoded.type !== 'refresh') {
         throw new Error("Invalid refresh token type");
       }

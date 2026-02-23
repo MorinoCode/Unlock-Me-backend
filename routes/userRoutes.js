@@ -12,7 +12,8 @@ import {
   updateGallery, 
   updatePassword, 
   updateProfileInfo,
-  getMatchesDashboard
+  getMatchesDashboard,
+  exportUserData
 } from "../controllers/userController/userController.js";
 import { blockUser, unblockUser, getBlockedUsers } from "../controllers/blockController/blockController.js";
 import { authLimiter } from "../middleware/authLimiter.js";
@@ -54,6 +55,7 @@ router.put("/profile/password", protect, validateUpdatePassword, updatePassword)
 router.put("/profile/gallery", protect, updateGallery);
 router.put("/profile/categories", protect, updateCategoryAnswers);
 router.delete("/profile/delete-account", protect, deleteAccount); 
+router.get("/profile/export-data", protect, exportUserData); // ✅ GDPR Right to Portability
 router.get("/matches/matches-dashbord", protect, getMatchesDashboard); 
 
 // ✅ Block User Feature

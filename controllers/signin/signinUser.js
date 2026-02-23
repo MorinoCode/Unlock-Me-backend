@@ -21,12 +21,14 @@ export const signinUser = async (req, res) => {
     const accessToken = jwt.sign(
       { userId: user._id, role: user.role, location: user.location, username: user.username, type: 'access' },
       process.env.JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "15m" } // ✅ Security Fix: Short-lived access token
     );
     
+    // ✅ Security Fix: Separated secrets for refresh tokens
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
     const refreshToken = jwt.sign(
       { userId: user._id, type: 'refresh' },
-      process.env.JWT_SECRET,
+      refreshSecret,
       { expiresIn: "7d" }
     );
     
@@ -42,7 +44,7 @@ export const signinUser = async (req, res) => {
       secure: isProduction, 
       sameSite: "lax", 
       domain: isProduction ? ".unlock-me.app" : undefined, 
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      maxAge: 15 * 60 * 1000, // 15 minutes
     });
     
     res.cookie("unlock-me-refresh-token", refreshToken, {

@@ -24,11 +24,13 @@ const workerHandler = async (job) => {
         if (publicId) await cloudinary.uploader.destroy(publicId).catch(() => {});
       }
 
+      console.log(`[MediaWorker] Sending avatar to Cloudinary for ${userId}...`);
       const uploadRes = await cloudinary.uploader.upload(avatarBase64, {
         folder: "unlock_me_avatars",
         transformation: [{ width: 500, height: 500, crop: "fill" }],
-        moderation: "aws_rekognition_ai_moderation", // ✅ AI Moderation
+        moderation: "aws_rek", // ✅ Correct Cloudinary flag for AWS Rekognition
       });
+      console.log(`[MediaWorker] Cloudinary upload success for ${userId}. Moderation length:`, uploadRes.moderation?.length);
 
       // ✅ Check Moderation Result
       if (uploadRes.moderation && uploadRes.moderation.length > 0) {
@@ -87,7 +89,7 @@ const workerHandler = async (job) => {
             const uploadRes = await cloudinary.uploader.upload(img, {
               folder: "unlock_me_gallery",
               transformation: [{ width: 800, crop: "limit" }],
-              moderation: "aws_rekognition_ai_moderation", // ✅ AI Moderation
+              moderation: "aws_rek", // ✅ Correct Cloudinary flag for AWS Rekognition
             });
 
             // ✅ Check Moderation Result
@@ -126,7 +128,15 @@ const workerHandler = async (job) => {
 
     // Save to DB
     const oldUser = user.toObject();
-    await User.findByIdAndUpdate(userId, { $set: updateData }, { new: true }).select("-password");
+    
+    // Fallback empty check to prevent Mongo invalid empty updates
+    if (Object.keys(updateData).length > 0) {
+        console.log(`[MediaWorker] Saving to MongoDB for ${userId}. Payload fields:`, Object.keys(updateData));
+        await User.findByIdAndUpdate(userId, { $set: updateData }, { new: true }).select("-password");
+        console.log(`[MediaWorker] DB Save complete for ${userId}`);
+    } else {
+        console.warn(`[MediaWorker] Empty updateData for ${userId}, skipping DB save.`);
+    }
 
     // Invalidate Caches
     await Promise.all([
@@ -137,17 +147,22 @@ const workerHandler = async (job) => {
     ]).catch(() => {});
 
     // Notify via Redis Pub/Sub for real-time UI refresh
-    await redisClient.publish("job-events", JSON.stringify({
-      type: "MEDIA_PROCESSED",
-      userId: userId.toString(),
-      mediaType: type,
-      payload: updateData
-    }));
+    const payloadInfo = {
+       type: "MEDIA_PROCESSED",
+       userId: userId.toString(),
+       mediaType: type,
+       payload: updateData
+    };
+    console.log(`[MediaWorker] Emitting JOB EVENT success for ${userId}:`, payloadInfo);
+    
+    await redisClient.publish("job-events", JSON.stringify(payloadInfo));
 
     return { success: true, userId, updatedFields: Object.keys(updateData) };
   } catch (error) {
     console.error(`❌ [MediaWorker] Error:`, error);
-    throw error;
+    // Don't throw, let BullMQ mark it as failed safely
+    // Throwing here might cause an unhandled Rejection if not properly bound
+    return Promise.reject(error);
   }
 };
 

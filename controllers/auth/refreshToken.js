@@ -15,7 +15,8 @@ export const refreshToken = async (req, res) => {
     }
     
     try {
-      const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+      const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+      const decoded = jwt.verify(refreshToken, refreshSecret);
       
       if (decoded.type !== 'refresh') {
         return res.status(401).json({ message: "Invalid token type" });
@@ -36,7 +37,7 @@ export const refreshToken = async (req, res) => {
       const accessToken = jwt.sign(
         { userId: user._id, role: user.role, username: user.username, type: 'access' },
         process.env.JWT_SECRET,
-        { expiresIn: "7d" }
+        { expiresIn: "15m" } // ✅ Security Fix: 15m access token
       );
       
       const isProduction = process.env.NODE_ENV === "production";
@@ -46,7 +47,7 @@ export const refreshToken = async (req, res) => {
         secure: isProduction,
         sameSite: "lax",
         domain: isProduction ? ".unlock-me.app" : undefined,
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        maxAge: 15 * 60 * 1000, // 15 minutes
       });
       
       res.status(200).json({ 

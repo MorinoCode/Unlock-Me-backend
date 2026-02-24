@@ -13,6 +13,7 @@ import GoDateApply from "../../models/GoDateApply.js";
 import { getMatchListLimit } from "../../utils/matchUtils.js";
 import { getMatchesCache, setMatchesCache, invalidateMatchesCache } from "../../utils/cacheHelper.js";
 import { mediaQueue } from "../../config/queue.js";
+import DeletionRequest from "../../models/DeletionRequest.js";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const PROFILE_FULL_TTL = 300; // 5 min
@@ -666,5 +667,38 @@ export const exportUserData = async (req, res) => {
       ? "Server error. Please try again later." 
       : error.message;
     res.status(500).json({ error: errorMessage });
+  }
+};
+
+// --- Public: Account Deletion Request (Google Play Compliance) ---
+export const requestAccountDeletion = async (req, res) => {
+  try {
+    const { identifier, reason } = req.body;
+
+    if (!identifier) {
+      return res.status(400).json({ message: "Email or username is required" });
+    }
+
+    // Basic validation: if it's an email, it should look like one
+    const isEmail = identifier.includes("@");
+    const identifierType = isEmail ? "email" : "username";
+
+    const newRequest = new DeletionRequest({
+      identifier: identifier.toLowerCase().trim(),
+      identifierType,
+      reason: reason || "No reason provided",
+    });
+
+    await newRequest.save();
+
+    res.status(200).json({ 
+      message: "Your request has been received. Our team will contact you within 24-72 hours to verify and process the deletion." 
+    });
+  } catch (error) {
+    console.error("Account Deletion Request Error:", error);
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Server error. Please try again later." 
+      : error.message;
+    res.status(500).json({ message: errorMessage });
   }
 };

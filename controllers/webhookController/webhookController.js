@@ -38,8 +38,8 @@ export const handleCloudinaryWebhook = async (req, res) => {
                let mediaType = "UPLOAD_GALLERY";
 
                // Check Avatar
-               if (user.avatar && user.avatar.includes(item.public_id)) {
-                   updateData.avatar = "https://res.cloudinary.com/dsm2vj701/image/upload/v1700000000/default-avatar.png";
+                if (user.avatar && user.avatar.includes(item.public_id)) {
+                   updateData.avatar = ""; // Reset to empty — frontend shows local defaultAvatar
                    notifyUser = true;
                    mediaType = "UPLOAD_AVATAR";
                }

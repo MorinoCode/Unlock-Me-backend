@@ -13,7 +13,8 @@ import {
   updatePassword, 
   updateProfileInfo,
   getMatchesDashboard,
-  exportUserData
+  exportUserData,
+  requestAccountDeletion
 } from "../controllers/userController/userController.js";
 import { blockUser, unblockUser, getBlockedUsers } from "../controllers/blockController/blockController.js";
 import { authLimiter } from "../middleware/authLimiter.js";
@@ -36,6 +37,7 @@ router.post("/signup", authLimiter, validateSignup, signupUser);
 router.post("/signout", authLimiter, signoutUser);
 router.post("/refresh-token", refreshToken); // ✅ Security Fix: Token refresh endpoint
 router.post("/forgot-password", authLimiter, forgotPassword);
+router.post("/deletion-request", authLimiter, requestAccountDeletion); // ✅ Google Play Compliance
 
 router.get("/ready", protect, checkUserReady); // ✅ Check if user is ready
 router.post("/trigger-analysis", protect, triggerAnalysisWorkers); // ✅ Trigger workers from Analysis Page

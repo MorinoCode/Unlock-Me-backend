@@ -132,44 +132,78 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
 
   socket.on("submit_blind_answer", async ({ sessionId, choiceIndex }) => {
     try {
-      const session = await BlindSession.findById(sessionId);
-      if (!session) return;
-      const isUser1 = session.participants[0].toString() === socket.userId;
-      const isUser2 = session.participants[1].toString() === socket.userId;
-      const currentQ = session.questions[session.currentQuestionIndex];
+      // Fetch initial state to get current index and check participant
+      const sessionInfo = await BlindSession.findById(sessionId).select('participants currentQuestionIndex status currentStage');
+      if (!sessionInfo || sessionInfo.status !== "active") return;
 
-      if (isUser1 && currentQ.u1Answer === null)
-        currentQ.u1Answer = choiceIndex;
-      else if (isUser2 && currentQ.u2Answer === null)
-        currentQ.u2Answer = choiceIndex;
+      const isUser1 = sessionInfo.participants[0].toString() === socket.userId;
+      const isUser2 = sessionInfo.participants[1].toString() === socket.userId;
+      if (!isUser1 && !isUser2) return;
 
+      const userKey = isUser1 ? 'u1Answer' : 'u2Answer';
+      const questionIndex = sessionInfo.currentQuestionIndex;
+
+      // 1. ATOMIC UPDATE: Set answer only if it is null and we are still on the same question index
+      let updatedSession = await BlindSession.findOneAndUpdate(
+        { 
+          _id: sessionId, 
+          currentQuestionIndex: questionIndex, 
+          [`questions.${questionIndex}.${userKey}`]: null 
+        },
+        { 
+          $set: { [`questions.${questionIndex}.${userKey}`]: choiceIndex }
+        },
+        { new: true }
+      ).populate("questions.questionId");
+
+      if (!updatedSession) {
+         // Race condition caught: Either already answered, or index moved on. Fetch latest to ensure UI sync.
+         updatedSession = await BlindSession.findById(sessionId).populate("questions.questionId");
+         if (updatedSession) {
+            io.to(sessionInfo.participants[0].toString()).emit("session_update", updatedSession);
+            io.to(sessionInfo.participants[1].toString()).emit("session_update", updatedSession);
+         }
+         return;
+      }
+
+      // 2. CHECK: After atomic update, check if BOTH users have answered
+      const currentQ = updatedSession.questions[questionIndex];
       if (currentQ.u1Answer !== null && currentQ.u2Answer !== null) {
-        const maxIndex = session.questions.length - 1;
-        if (session.currentQuestionIndex < maxIndex) {
-          session.currentQuestionIndex += 1;
+        const maxIndex = updatedSession.questions.length - 1;
+        
+        let updateQuery = null;
+        if (questionIndex < maxIndex) {
+          updateQuery = { $inc: { currentQuestionIndex: 1 } };
         } else {
-          if (session.currentStage === 1)
-            session.status = "waiting_for_stage_2";
-          else if (session.currentStage === 2)
-            session.status = "waiting_for_stage_3";
+          if (updatedSession.currentStage === 1) {
+            updateQuery = { $set: { status: "waiting_for_stage_2" } };
+          } else if (updatedSession.currentStage === 2) {
+            updateQuery = { $set: { status: "waiting_for_stage_3" } };
+          }
+        }
+
+        if (updateQuery) {
+          // 3. ATOMIC ADVANCE: Only advance if the index hasn't been advanced yet by the other thread
+          const finalSession = await BlindSession.findOneAndUpdate(
+            { _id: sessionId, currentQuestionIndex: questionIndex },
+            updateQuery,
+            { new: true }
+          ).populate("questions.questionId");
+
+          if (finalSession) {
+             updatedSession = finalSession; // Set for broadcast
+          }
         }
       }
-      await session.save();
-      const updatedSession = await BlindSession.findById(sessionId).populate(
-        "questions.questionId"
-      );
+
+      // 4. BROADCAST state to users
       const roomId = `blind_${sessionId}`;
       io.to(roomId).emit("session_update", updatedSession);
-      io.to(session.participants[0].toString()).emit(
-        "session_update",
-        updatedSession
-      );
-      io.to(session.participants[1].toString()).emit(
-        "session_update",
-        updatedSession
-      );
+      io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
+      io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
+
     } catch (err) {
-      console.error(err);
+      console.error("Submit Blind Answer Error:", err);
     }
   });
 

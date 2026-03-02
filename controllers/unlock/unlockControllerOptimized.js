@@ -275,7 +275,7 @@ export const handleunlockAction = async (req, res) => {
     }
     if (action === "up") {
          if (superLikeLimit !== Infinity && dailySuperLikes >= superLikeLimit) {
-              return res.status(403).json({ message: "Daily Super Like limit reached.", errorLabel: "Limit Reached" });
+              return res.status(403).json({ message: "Daily Super Unlock limit reached.", errorLabel: "Limit Reached" });
          }
     }
 
@@ -311,7 +311,7 @@ export const handleunlockAction = async (req, res) => {
             senderId: currentUserId,
             senderName: me.name,
             senderAvatar: me.avatar,
-            message: "You received a Super Like! 🌟",
+            message: "You received a Super Unlock! 🌟",
             targetId: currentUserId.toString(),
         });
     }
@@ -323,7 +323,7 @@ export const handleunlockAction = async (req, res) => {
             senderId: currentUserId,
             senderName: me.name,
             senderAvatar: me.avatar,
-            message: "It's a Match! ❤️",
+            message: "Connection Unlocked! 🔓",
             targetId: currentUserId.toString(),
         });
         

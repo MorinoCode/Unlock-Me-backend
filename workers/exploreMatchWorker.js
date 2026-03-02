@@ -78,45 +78,59 @@ export async function generateAnalysisData(userId) {
 
     // ✅ SEPARATE QUERIES FOR EACH SECTION (No overlap, better distribution)
     
-    // 1. Near You - Same City
-    const nearYouQuery = {
-      ...baseQuery,
-      "location.city": currentUser.location?.city
-    };
-    
+    // 1. Near You - Same City Redis GEO
+    let nearYou = [];
     console.log(`[AnalysisWorker] SECTION 1: Near You (City: ${currentUser.location?.city})...`);
-    const nearYou = await User.aggregate([
-      { $match: nearYouQuery },
-      { $sample: { size: SECTION_SIZE } },
-      { $project: projection }
-    ]);
+    try {
+        const countryKey = (userCountry).trim().toLowerCase();
+        if (currentUser.location?.coordinates && currentUser.location.coordinates[0] !== 0) {
+           const nearbyIds = await redisClient.geoSearch(`users:locations:${countryKey}`, { member: userId.toString() }, { radius: 100, unit: 'km' }, { COUNT: SECTION_SIZE + 50 });
+           if (nearbyIds && nearbyIds.length > 0) {
+               const validIds = nearbyIds.filter(id => !excludedIds.includes(id) && id !== userId.toString()).slice(0, SECTION_SIZE);
+               if (validIds.length > 0) {
+                   nearYou = await User.find({ _id: { $in: validIds } }).select(projection).lean();
+               }
+           }
+        }
+    } catch(e) { console.error("[AnalysisWorker] Redis GEO fail", e.message); }
+
+    if (nearYou.length === 0) {
+        // Fallback
+        const nearYouQuery = { ...baseQuery, "location.city": currentUser.location?.city };
+        nearYou = await User.aggregate([{ $match: nearYouQuery }, { $sample: { size: SECTION_SIZE } }, { $project: projection }]);
+    }
     console.log(`   - Found: ${nearYou.length} users near you.`);
 
     // Exclude Near You users from other sections
-    const nearYouIds = nearYou.map(u => u._id);
+    const nearYouIds = nearYou.map(u => u._id.toString());
     const excludedWithNearYou = [...excludedIds, ...nearYouIds];
 
-    // 2. Fresh Faces - Recently Joined (exclude Near You)
+    // 2. Fresh Faces - Recently Joined Redis ZSET
+    let freshFaces = [];
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
-    const freshFacesQuery = {
-      ...baseQuery,
-      _id: { $nin: excludedWithNearYou },
-      createdAt: { $gte: thirtyDaysAgo }
-    };
-    
     console.log(`[AnalysisWorker] SECTION 2: Fresh Faces (Since: ${thirtyDaysAgo.toISOString().split('T')[0]})...`);
-    const freshFaces = await User.aggregate([
-      { $match: freshFacesQuery },
-      { $sort: { createdAt: -1 } },
-      { $limit: SECTION_SIZE },
-      { $project: projection }
-    ]);
+    
+    try {
+        const countryKey = (userCountry).trim().toLowerCase();
+        const recentIds = await redisClient.zRange(`users:fresh:${countryKey}`, 0, SECTION_SIZE + 100, { REV: true });
+        if (recentIds && recentIds.length > 0) {
+             const validIds = recentIds.filter(id => !excludedWithNearYou.includes(id) && id !== userId.toString()).slice(0, SECTION_SIZE);
+             if (validIds.length > 0) {
+                 freshFaces = await User.find({ _id: { $in: validIds } }).select(projection).lean();
+             }
+        }
+    } catch(e) { console.error("[AnalysisWorker] Redis ZSET fail", e.message); }
+
+    if (freshFaces.length === 0) {
+        // Fallback
+        const freshFacesQuery = { ...baseQuery, _id: { $nin: excludedWithNearYou }, createdAt: { $gte: thirtyDaysAgo } };
+        freshFaces = await User.aggregate([{ $match: freshFacesQuery }, { $sort: { createdAt: -1 } }, { $limit: SECTION_SIZE }, { $project: projection }]);
+    }
     console.log(`   - Found: ${freshFaces.length} new users.`);
 
     // Exclude Fresh Faces from remaining sections
-    const freshFacesIds = freshFaces.map(u => u._id);
+    const freshFacesIds = freshFaces.map(u => u._id.toString());
     const excludedWithFresh = [...excludedWithNearYou, ...freshFacesIds];
 
     // 3. Across the Country - Different Cities (exclude Near You + Fresh Faces)
@@ -328,16 +342,39 @@ export async function findMatchesForSection(currentUser, section, limit = 50) {
 
         // Section Specific Filters
         if (section === "nearby") {
-            if (currentUser.location.city) {
-                // Use regex for flexible city matching
-                query["location.city"] = { $regex: new RegExp(`^${currentUser.location.city}$`, "i") };
+            try {
+                const countryKey = (currentUser.location.country || "World").trim().toLowerCase();
+                const nearbyIds = await redisClient.geoSearch(`users:locations:${countryKey}`, { member: currentUser._id.toString() }, { radius: 100, unit: 'km' }, { COUNT: limit * 2 });
+                if (nearbyIds && nearbyIds.length > 0) {
+                    const validIds = nearbyIds.filter(id => !excludedIds.includes(id));
+                    query._id = { $in: validIds };
+                } else if (currentUser.location.city) {
+                    query["location.city"] = { $regex: new RegExp(`^${currentUser.location.city}$`, "i") };
+                }
+            } catch(e) {
+                console.warn("[Explore] Redis GEO search failed:", e.message);
+                if (currentUser.location.city) {
+                    query["location.city"] = { $regex: new RegExp(`^${currentUser.location.city}$`, "i") };
+                }
             }
         } else if (section === "fresh_faces") {
-            // Already sorted by createdAt: -1
-            // Ensure created in last 30 days?
-            const thirtyDaysAgo = new Date();
-            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-            query.createdAt = { $gte: thirtyDaysAgo };
+            try {
+                const countryKey = (currentUser.location.country || "World").trim().toLowerCase();
+                const recentIds = await redisClient.zRange(`users:fresh:${countryKey}`, 0, limit * 3, { REV: true });
+                if (recentIds && recentIds.length > 0) {
+                    const validIds = recentIds.filter(id => !excludedIds.includes(id));
+                    query._id = { $in: validIds };
+                } else {
+                    const thirtyDaysAgo = new Date();
+                    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                    query.createdAt = { $gte: thirtyDaysAgo };
+                }
+            } catch (e) {
+                console.warn("[Explore] Redis ZSET search failed:", e.message);
+                const thirtyDaysAgo = new Date();
+                thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                query.createdAt = { $gte: thirtyDaysAgo };
+            }
         } else if (section === "soulmates") {
              // For soulmates, we need high compatibility (> 90%). 
              // Since we can't query compatibility directly (it's computed), 

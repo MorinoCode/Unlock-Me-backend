@@ -227,7 +227,7 @@ export const handleunlockAction = async (req, res) => {
     }
 
     // 2. FAST MATCH CHECK (Read-Only)
-    // To show "It's a Match!" immediately, we need to check if target user liked us.
+    // To show "Connection Unlocked! 🔓" immediately, we need to check if target user liked us.
     let isMatch = false;
     let matchDetails = null;
 

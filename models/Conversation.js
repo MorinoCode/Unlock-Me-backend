@@ -44,7 +44,6 @@ conversationSchema.index({ updatedAt: -1 });
 conversationSchema.index({ "lastMessage.createdAt": -1 });
 conversationSchema.index({ status: 1, updatedAt: -1 });
 conversationSchema.index({ hiddenBy: 1 });
-// ✅ Improvement #25: Compound index for getConversations query
-conversationSchema.index({ participants: 1, status: 1, hiddenBy: 1 });
+// ❌ Removed `{ participants: 1, status: 1, hiddenBy: 1 }` (Cannot index parallel arrays)
 
 export default mongoose.model("Conversation", conversationSchema);

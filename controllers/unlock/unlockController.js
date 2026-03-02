@@ -29,12 +29,12 @@ export const getunlockCards = async (req, res) => {
         return res.status(404).json({ message: "User not found" });
     }
 
-    // ✅ NEW ARCHITECTURE: Fetch from Redis feed instead of live aggregation
-    const feedKey = `unlock:feed:${currentUserId}`;
-    console.log(`[unlockCards] Checking Redis feed: ${feedKey}`);
+    // ✅ NEW ARCHITECTURE: Fetch from Redis ZSET feed instead of live aggregation
+    const feedKey = `unlock:feed:zset:${currentUserId}`;
+    console.log(`[unlockCards] Checking Redis ZSET feed: ${feedKey}`);
 
-    let feedIds = await redisClient.lRange(feedKey, 0, 19); // Get first 20 IDs
-    console.log(`[unlockCards] Feed IDs from Redis: ${feedIds.length}`);
+    let feedIds = await redisClient.zRange(feedKey, 0, 19, { REV: true }); // Get top 20 IDs by highest score O(1)
+    console.log(`[unlockCards] Feed IDs from Redis ZSET: ${feedIds.length}`);
 
     // If feed is empty or low, trigger refill via BULLMQ
     if (feedIds.length < 20) { // Threshold 20
@@ -48,8 +48,8 @@ export const getunlockCards = async (req, res) => {
       if (feedIds.length === 0) {
         console.log(`[unlockCards] Feed completely empty. Waiting 2s for worker...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
-        feedIds = await redisClient.lRange(feedKey, 0, 19);
-        console.log(`[unlockCards] After wait, feed size: ${feedIds.length}`);
+        feedIds = await redisClient.zRange(feedKey, 0, 19, { REV: true });
+        console.log(`[unlockCards] After wait, feed ZSET size: ${feedIds.length}`);
       }
     } else {
       console.log(`✅ [unlockCards] Feed OK (${feedIds.length} users available)`);
@@ -261,14 +261,14 @@ export const handleunlockAction = async (req, res) => {
 
     // 4. Redis Feed Cleanup (Shared)
     try {
-      const feedKey = `unlock:feed:${currentUserId}`;
+      const feedKey = `unlock:feed:zset:${currentUserId}`;
       const historyKey = `unlock:history:${currentUserId}`;
-      await redisClient.lRem(feedKey, 1, targetUserId.toString());
+      await redisClient.zRem(feedKey, targetUserId.toString()); // O(1) removal
       await redisClient.sAdd(historyKey, targetUserId.toString());
       await redisClient.expire(historyKey, 7 * 24 * 60 * 60);
 
       // Auto-refill check (Fire & Forget)
-      const len = await redisClient.lLen(feedKey);
+      const len = await redisClient.zCard(feedKey); // O(1) length
       if (len < 20) {
            addTounlockFeedQueue(currentUserId, false).catch(() => {});
       }

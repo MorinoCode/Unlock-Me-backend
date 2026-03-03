@@ -14,12 +14,13 @@ import { addToQueue, leaveQueue } from "../utils/blindDateService.js";
 export const handleSocketConnection = (io, socket, userSocketMap) => {
   const userId = socket.handshake.query.userId;
 
+  // ✅ FIX #5: Support multi-device — store a Set of socketIds per userId
   if (userId && userId !== "undefined") {
     socket.userId = userId;
     socket.join(userId);
-    userSocketMap.set(userId, socket.id);
+    if (!userSocketMap.has(userId)) userSocketMap.set(userId, new Set());
+    userSocketMap.get(userId).add(socket.id);
   }
-
 
   // Handle join_room event (for userId room joining)
   socket.on("join_room", (userId) => {
@@ -27,7 +28,8 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
     const roomName = String(userId);
     socket.userId = roomName;
     socket.join(roomName);
-    userSocketMap.set(roomName, socket.id);
+    if (!userSocketMap.has(roomName)) userSocketMap.set(roomName, new Set());
+    userSocketMap.get(roomName).add(socket.id);
     console.log(`[Socket] User ${userId} joined room: ${roomName}, socket ID: ${socket.id}`);
   });
 
@@ -82,37 +84,49 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
 
   socket.on("confirm_instructions", async ({ sessionId }) => {
     try {
-      const sessionInfo = await BlindSession.findById(sessionId).select('participants status');
-      if (!sessionInfo || sessionInfo.status !== "instructions") return;
-      
-      const isUser1 = sessionInfo.participants[0].toString() === socket.userId;
-      const userKey = isUser1 ? 'u1InstructionRead' : 'u2InstructionRead';
+      // ✅ CRITICAL FIX #2: Fully atomic — determine user key + set flag in ONE query.
+      // First, identify which participant this socket is (no separate read needed).
+      const sessionCheck = await BlindSession.findOne(
+        { _id: sessionId, status: "instructions" }
+      ).select("participants stageProgress");
+      if (!sessionCheck) return; // Already transitioned or doesn't exist
 
-      // Atomic update
+      const isUser1 = sessionCheck.participants[0].toString() === socket.userId;
+      const isUser2 = sessionCheck.participants[1].toString() === socket.userId;
+      if (!isUser1 && !isUser2) return; // Not a participant
+
+      const userKey = isUser1 ? "u1InstructionRead" : "u2InstructionRead";
+      const otherKey = isUser1 ? "u2InstructionRead" : "u1InstructionRead";
+      const otherAlreadyRead = sessionCheck.stageProgress?.[otherKey] === true;
+
+      if (otherAlreadyRead) {
+        // ✅ ATOMIC: Both ready — transition status AND set flag in ONE operation.
+        // The status filter `"instructions"` guarantees only ONE server wins this race.
+        const activeSession = await BlindSession.findOneAndUpdate(
+          { _id: sessionId, status: "instructions" },
+          { $set: { [`stageProgress.${userKey}`]: true, status: "active", currentStage: 1 } },
+          { new: true }
+        ).populate("questions.questionId");
+
+        if (activeSession) {
+          io.to(activeSession.participants[0].toString()).emit("session_update", activeSession);
+          io.to(activeSession.participants[1].toString()).emit("session_update", activeSession);
+        }
+        // If activeSession is null, another server already did the transition — no-op is correct.
+        return;
+      }
+
+      // Only this user confirmed so far — just set their flag
       const updatedSession = await BlindSession.findOneAndUpdate(
-        { _id: sessionId },
+        { _id: sessionId, status: "instructions" },
         { $set: { [`stageProgress.${userKey}`]: true } },
         { new: true }
       ).populate("questions.questionId");
 
-      if (updatedSession.stageProgress.u1InstructionRead && updatedSession.stageProgress.u2InstructionRead && updatedSession.status === "instructions") {
-         // Atomic transition to prevent double-firing
-         const activeSession = await BlindSession.findOneAndUpdate(
-            { _id: sessionId, status: "instructions" },
-            { $set: { status: "active", currentStage: 1 } },
-            { new: true }
-         ).populate("questions.questionId");
-
-         if (activeSession) {
-             io.to(activeSession.participants[0].toString()).emit("session_update", activeSession);
-             io.to(activeSession.participants[1].toString()).emit("session_update", activeSession);
-             return;
-         }
+      if (updatedSession) {
+        io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
+        io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
       }
-
-      // If not transitioning, just broadcast the read status update
-      io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
-      io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
     } catch (err) {
       console.error("Confirm Instructions Error:", err);
     }
@@ -391,10 +405,15 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
           console.error("[Socket] Session Cleanup Error:", err);
       }
 
-      userSocketMap.delete(socket.userId);
+      // ✅ FIX #5: Multi-device cleanup — only remove THIS socket from the Set
+      const socketSet = userSocketMap.get(socket.userId);
+      if (socketSet) {
+        socketSet.delete(socket.id);
+        if (socketSet.size === 0) userSocketMap.delete(socket.userId);
+      }
       const roomName = String(socket.userId);
       socket.leave(roomName);
-      console.log(`[Socket] Room ${roomName} left by user ${socket.userId}`);
+      console.log(`[Socket] Room ${roomName} left by socket ${socket.id} (user ${socket.userId})`);
     }
     console.log(`👋 User disconnected: ${socket.userId || socket.id}`);
   });

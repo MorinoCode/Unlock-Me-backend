@@ -318,8 +318,11 @@ app.set("io", io);
 
 const userSocketMap = new Map();
 
+// ✅ FIX #5: Updated to work with Set-based userSocketMap (multi-device support)
 export const getReceiverSocketId = (receiverId) => {
-  return userSocketMap.get(receiverId);
+  const socketSet = userSocketMap.get(receiverId);
+  if (!socketSet || socketSet.size === 0) return undefined;
+  return socketSet.values().next().value; // Return first active socket
 };
 
 // ✅ Security Fix #9: Socket authentication middleware

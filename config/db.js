@@ -12,17 +12,22 @@ const connectDB = async () => {
     try {
       // تنظیمات حرفه‌ای برای پرفورمنس بالا (Production Ready)
       const conn = await mongoose.connect(process.env.MONGO_URI, {
-        // تعداد کانکشن‌هایی که همزمان باز نگه می‌دارد (برای سرعت بالا)
-        maxPoolSize: 10, 
+        // ✅ SCALE FIX #8: Raised from 10 → 100 for 1M user capacity
+        // At 1M users: 15 workers + API threads need far more than 10 connections
+        maxPoolSize: 100,
+        minPoolSize: 10,       // Keep 10 warm connections always ready
         
         // اگر سرور قطع شد، تا ۵ ثانیه تلاش کن وصل شی
-        serverSelectionTimeoutMS: 5000, 
+        serverSelectionTimeoutMS: 5000,
         
         // اگر کانکشنی ۴۵ ثانیه بیکار بود، ببندش تا رم آزاد شه
-        socketTimeoutMS: 45000, 
+        socketTimeoutMS: 45000,
+        
+        // Heartbeat every 10s to detect lost connections faster
+        heartbeatFrequencyMS: 10000,
         
         // استفاده از IPv4 (سازگاری بهتر با اکثر سرورها)
-        family: 4 
+        family: 4
       });
 
       console.log(`✅ MongoDB Connected: ${conn.connection.host}`);

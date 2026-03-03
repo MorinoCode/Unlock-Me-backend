@@ -177,7 +177,7 @@ export const protect = async (req, res, next) => {
     req.user = userObj;
     req.user.userId = userObj._id.toString();
     next();
-  } catch (authErr) {
+  } catch {
     return res.status(401).json({ message: "Token is not valid" });
   }
 };

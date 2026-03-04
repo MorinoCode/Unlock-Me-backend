@@ -192,9 +192,15 @@ export const optionalProtect = async (req, res, next) => {
       const cached = await getUserFromCache(decoded.userId);
       if (cached) {
         req.user = cached;
+        req.user.userId = cached._id.toString(); // ✅ BUG FIX: Restore missing userId property from cache
       } else {
-        req.user = await User.findById(decoded.userId).select("-password");
-        if (req.user) await cacheUser(decoded.userId, req.user.toObject());
+        const userDoc = await User.findById(decoded.userId).select("-password -refreshToken");
+        if (userDoc) {
+          const userObj = userDoc.toObject();
+          await cacheUser(decoded.userId, userObj);
+          req.user = userObj;
+          req.user.userId = userObj._id.toString();
+        }
       }
     } catch {
       req.user = null; // ✅ FIX: No console.log for expected token errors

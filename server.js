@@ -55,7 +55,7 @@ import "./workers/notificationWorker.js"; // ✅ NEW: Enterprise Notification Wo
 import "./workers/mediaWorker.js"; // ✅ NEW: Enterprise Media Worker
 import "./workers/onboardingWorker.js"; // ✅ NEW: Enterprise Onboarding Worker
 import "./workers/revenueCatWorker.js"; // ✅ NEW: Async RevenueCat Webhook Processor
-
+import "./workers/messageWorker.js"; // ✅ NEW: Async Message Queue Worker
 
 import { Worker } from "worker_threads";
 
@@ -120,6 +120,10 @@ const setupRedisSubscriber = async () => {
         } else if (event.type === 'ONBOARDING_PROCESSED') {
           console.log(`🧬 [Socket] Emit Onboarding Processed to user ${event.userId}`);
           io.to(event.userId).emit("onboarding_processed", event.payload);
+        } else if (event.type === 'NEW_CHAT_MESSAGE') {
+          // ✅ Distribute to all devices for receiver and sender
+          io.to(event.receiverId).emit("receive_message", event.message);
+          // Omit sending to sender because sender's UI updates optimistically, unless needed.
         }
       }
     } catch (err) {

@@ -25,3 +25,24 @@ Thumbs.db
 # ✅ FIX #10: CLI Binaries — never commit executables to git
 *.exe
 stripe.exe
+
+# Temporary / Debug / Seed Scripts
+debug*.js
+seed*.js
+simulate*.js
+stress_test.js
+inspect*.js
+delete*.js
+fix*.js
+check_*.js
+clear_cache.js
+keepRedisActive.js
+server_test.js
+ACTIVATION_GUIDE.md
+SCALABILITY_OPTIMIZATION.md
+STATUS_CHECK.md
+STRIPE_DIAMOND_GUIDE.md
+
+# Debug Logs
+worker-debug*.txt
+*.log

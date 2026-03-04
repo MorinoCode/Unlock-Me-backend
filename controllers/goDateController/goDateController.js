@@ -16,6 +16,7 @@ import {
   invalidateMatchesCache,
   invalidateGoDateCacheForUser,
   invalidateGoDateCacheForUsers,
+  invalidateGoDateGlobalCache,
 } from "../../utils/cacheHelper.js";
 
 const GO_DATE_CACHE_TTL = 300; // 5 min
@@ -98,6 +99,9 @@ export const createGoDate = async (req, res) => {
       maxAge,
     } = req.body;
 
+    // Use country from request or fallback to user profile country
+    const country = req.body.country || user.location?.country || "Global";
+
     let imageUrl = "";
     let imageId = "";
 
@@ -132,7 +136,7 @@ export const createGoDate = async (req, res) => {
       title,
       description,
       dateTime,
-      location: { city, generalArea, exactAddress },
+      location: { country, city, generalArea, exactAddress },
       paymentType,
       preferences: {
         gender: genderPref || "other",
@@ -145,6 +149,7 @@ export const createGoDate = async (req, res) => {
 
     await newDate.save();
     await invalidateGoDateCacheForUser(userId);
+    await invalidateGoDateGlobalCache(country, city); // ✅ Invalidate City Cache Globally
     await invalidateMatchesCache("global", `go_date_details_${newDate._id}`).catch(() => {});
     res.status(201).json(newDate);
   } catch (err) {
@@ -160,52 +165,65 @@ export const createGoDate = async (req, res) => {
 export const getAvailableDates = async (req, res) => {
   try {
     const userId = req.user._id;
+    const userCountry = (req.user.location?.country || "Global").trim().toLowerCase();
     const city = (req.query.city || "").trim().toLowerCase();
     const category = (req.query.category || "all").trim().toLowerCase();
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
     const skip = (page - 1) * limit;
 
-    const cacheKey = `go_dates_browse_${city}_${category}_p${page}_l${limit}`;
+    // ✅ Rank 1 Scale Fix: Redis key is now GLOBAL per geographical coordinate
+    const cacheKey = `go_dates_browse_${userCountry}_${city}_${category}_p${page}_l${limit}`;
 
-    const cached = await getMatchesCache(userId, cacheKey);
-    if (cached) return res.json(cached);
+    const cached = await getMatchesCache("global", cacheKey);
+    let dates = [];
 
-    const query = {
-      status: "open",
-      dateTime: { $gt: new Date(Date.now() - EXPIRED_THRESHOLD_MS) },
-      creator: { $ne: userId },
-    };
-
-    if (city) {
-      // ✅ Optimization: Exact indexed match for city (Dropdown ensures consistency)
-      query["location.city"] = city;
-    }
-    if (category && category !== "all") {
-      query.category = category;
-    }
-
-    const dates = await GoDate.find(query)
-      .populate("creator", "name avatar age gender isVerified")
-      .sort({ createdAt: -1 }) // Sort by Tarikhe Sakht as requested
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    const sanitizedDates = dates.map((date) => {
-      const d = { ...date };
-      // ✅ Privacy Guard: Hide exact address in browse list
-      if (d.location) delete d.location.exactAddress;
+    if (cached) {
+      dates = cached;
+    } else {
+      const query = {
+        status: "open",
+        dateTime: { $gt: new Date(Date.now() - EXPIRED_THRESHOLD_MS) },
+        // ✅ Removed { creator: { $ne: userId } } for global caching pool
+      };
       
-      d.hasApplied = (d.applicants || []).some(
-        (id) => id && id.toString() === userId.toString()
-      );
-      return d;
-    });
+      // ✅ Bug Fix: Enforce Country boundary
+      query["location.country"] = { $regex: new RegExp(`^${userCountry}$`, "i") };
 
-    // ✅ Cache for 10 minutes as requested
-    await setMatchesCache(userId, cacheKey, sanitizedDates, 600);
-    res.json(sanitizedDates);
+      if (city) {
+        query["location.city"] = { $regex: new RegExp(`^${city}$`, "i") };
+      }
+      if (category && category !== "all") {
+        query.category = category;
+      }
+
+      dates = await GoDate.find(query)
+        .populate("creator", "name avatar age gender isVerified")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean();
+
+      // Mask Exact Address for global cache
+      dates = dates.map(d => {
+        if (d.location) delete d.location.exactAddress;
+        return d;
+      });
+
+      await setMatchesCache("global", cacheKey, dates, 120); // 2 min global cache
+    }
+
+    // ✅ Node.js Memory Computation (O(1)): Filter out my dates & inject `hasApplied`
+    const filteredAndSanitizedDates = dates
+      .filter((d) => d.creator?._id?.toString() !== userId.toString())
+      .map((d) => ({
+        ...d,
+        hasApplied: (d.applicants || []).some((id) => id && id.toString() === userId.toString()),
+      }));
+
+    res.json(filteredAndSanitizedDates);
+
+    // Return directly since cache mapping occurred above
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -313,6 +331,7 @@ export const applyForDate = async (req, res) => {
     await invalidateGoDateCacheForUser(userId);
     await invalidateGoDateCacheForUser(date.creator); // ✅ Critical Fix: Invalidate Creator Cache
     await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
+    await invalidateGoDateGlobalCache(date.location?.country, date.location?.city);
 
     await godateQueue.add("notif", {
       type: "NOTIFICATION",
@@ -359,6 +378,7 @@ export const withdrawApplication = async (req, res) => {
     await invalidateGoDateCacheForUser(userId);
     await invalidateGoDateCacheForUser(date.creator); // ✅ Critical Fix: Invalidate Creator Cache
     await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
+    await invalidateGoDateGlobalCache(date.location?.country, date.location?.city);
 
     res.json({ success: true, message: "Application withdrawn" });
   } catch (err) {
@@ -518,6 +538,7 @@ export const acceptDateApplicant = async (req, res) => {
 
     await invalidateGoDateCacheForUsers([userId, applicantId]);
     await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
+    await invalidateGoDateGlobalCache(date.location?.country, date.location?.city);
     
     // ✅ Critical Fix: Invalidate Conversation Cache (Correct Keys)
     await invalidateMatchesCache(userId, "conversations_active");
@@ -602,6 +623,7 @@ export const cancelGoDate = async (req, res) => {
       await invalidateGoDateCacheForUser(userId);
     }
     await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
+    await invalidateGoDateGlobalCache(date.location?.country, date.location?.city);
 
     res.json({ success: true, message: "Date cancelled" });
   } catch (err) {
@@ -688,6 +710,7 @@ export const deleteGoDate = async (req, res) => {
     await GoDateApply.deleteMany({ dateId });
     await invalidateGoDateCacheForUser(userId);
     await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
+    await invalidateGoDateGlobalCache(date.location?.country, date.location?.city);
 
     res.json({ success: true });
   } catch (err) {

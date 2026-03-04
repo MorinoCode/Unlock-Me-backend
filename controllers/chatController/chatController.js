@@ -6,11 +6,8 @@ import sanitizeHtml from "sanitize-html";
 import { emitNotification } from "../../utils/notificationHelper.js";
 import User from "../../models/User.js";
 import { getDailyDmLimit } from "../../utils/subscriptionRules.js";
-import {
-  getMatchesCache,
-  setMatchesCache,
-  invalidateMatchesCache,
-} from "../../utils/cacheHelper.js";
+import { getMatchesCache, setMatchesCache, invalidateMatchesCache } from "../../utils/cacheHelper.js";
+import { messageQueue } from "../../config/queue.js"; // ✅ NEW: BullMQ
 import mongoose from "mongoose";
 
 const INBOX_CACHE_TTL = 180; // 3 min
@@ -25,7 +22,6 @@ export const sendMessage = async (req, res) => {
   try {
     const { receiverId, text, parentMessage, fileUrl, fileType } = req.body;
     const senderId = req.user.userId || req.user.id;
-    const io = req.app.get("io");
 
     if (!receiverId) {
       return res.status(400).json({ error: "receiverId is required" });
@@ -200,18 +196,28 @@ export const sendMessage = async (req, res) => {
         status: initialStatus,
         hiddenBy: []
       });
-      // We'll save it later after setting lastMessage
+      await conversation.save(); // Initial save
     } else {
-      // Update existing conversation properties
-      if (isMatch) conversation.status = "active";
-      if (finalUnlocked) conversation.isUnlocked = true;
-      // If it became a match or was recently unlocked via other means
+      let needsSave = false;
+      if (isMatch && conversation.status !== "active") {
+        conversation.status = "active";
+        needsSave = true;
+      }
+      if (finalUnlocked && !conversation.isUnlocked) {
+        conversation.isUnlocked = true;
+        needsSave = true;
+      }
       if (conversation.status === "active" && !conversation.matchType) {
         conversation.matchType = finalMatchType;
+        needsSave = true;
       }
+      if (needsSave) await conversation.save(); 
     }
 
-    const newMessage = new Message({
+    // ✅ Performance Fix: Optimistic ID Generation & BullMQ Queueing
+    const messageId = new mongoose.Types.ObjectId();
+    const newMessage = {
+      _id: messageId,
       conversationId: conversation._id,
       sender: senderId,
       receiver: receiverId,
@@ -220,32 +226,16 @@ export const sendMessage = async (req, res) => {
       fileType: fileType || "text",
       parentMessage: parentMessage || null,
       isRead: false,
-    });
-
-    await newMessage.save();
-
-    conversation.lastMessage = {
-      text: cleanText || (fileType === "image" ? "📷 Image" : "📄 File"),
-      sender: senderId,
       createdAt: new Date(),
     };
 
-    // اگر گیرنده قبلاً چت را از لیستش حذف کرده بود، با پیام جدید دوباره در لیستش ظاهر شود
-    if (conversation.hiddenBy?.length) {
-      conversation.hiddenBy = conversation.hiddenBy.filter(
-        (id) => id.toString() !== receiverId.toString()
-      );
-    }
-
-    await conversation.save();
-
-    invalidateInboxForUser(senderId);
-    invalidateInboxForUser(receiverId);
-
-    io.to(receiverId).emit("receive_message", newMessage);
-
-    // نوتیف پیام فقط روی آیکون Messages نمایش داده می‌شود، در لیست نوتیفیکیشن ذخیره/ارسال نمی‌شود
-    // (emitNotification برای چت فراخوانی نمی‌شود)
+    // Dispatch to BullMQ for DB writing and sockets without crashing Node.js Event Loop
+    await messageQueue.add("process-message", {
+      newMessage,
+      senderId,
+      receiverId,
+      conversationId: conversation._id,
+    });
 
     res.status(201).json(newMessage);
   } catch (error) {
@@ -373,17 +363,26 @@ export const getMessages = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit))); // Max 100 per page
     const skip = (pageNum - 1) * limitNum;
 
-    const messages = await Message.find({
-      $or: [
-        { sender: myId, receiver: otherUserId },
-        { sender: otherUserId, receiver: myId },
-      ],
-      isDeleted: false, // ✅ Bug Fix: Don't show deleted messages
-    })
-      .sort({ createdAt: -1 }) // ✅ Performance Fix: Newest first
-      .limit(limitNum)
-      .skip(skip)
-      .lean();
+    const myObjId = mongoose.Types.ObjectId.isValid(myId) ? new mongoose.Types.ObjectId(myId) : myId;
+    const otherObjId = mongoose.Types.ObjectId.isValid(otherUserId) ? new mongoose.Types.ObjectId(otherUserId) : otherUserId;
+
+    // ✅ Performance Fix: Find conversation first (Indexed)
+    const conversation = await Conversation.findOne({
+      participants: { $all: [myObjId, otherObjId] }
+    }).select("_id").lean();
+
+    let messages = [];
+    if (conversation) {
+      // ✅ Performance Fix: Query messages strictly by conversationId index
+      messages = await Message.find({
+        conversationId: conversation._id,
+        isDeleted: false,
+      })
+        .sort({ createdAt: -1 })
+        .limit(limitNum)
+        .skip(skip)
+        .lean();
+    }
 
     res.status(200).json(messages);
   } catch (error) {
@@ -452,7 +451,11 @@ export const markAsRead = async (req, res) => {
       { $set: { isRead: true } }
     );
 
-    await invalidateMatchesCache(myId, "unread_count").catch(() => {});
+    await Promise.all([
+      invalidateMatchesCache(myId, "unread_count"),
+      invalidateMatchesCache(myId, "conversations_active"),
+      invalidateMatchesCache(myId, "conversations_requests")
+    ]).catch(() => {});
 
     const io = req.app.get("io");
     io.to(otherUserId).emit("messages_seen", { seenBy: myId });

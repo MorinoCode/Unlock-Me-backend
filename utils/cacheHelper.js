@@ -178,3 +178,24 @@ export const invalidateGoDateCacheForUsers = async (userIds) => {
     await invalidateGoDateCacheForUser(id);
   }
 };
+
+/**
+ * Invalidate Go Date Global Browse Cache for a specific country/city.
+ * Call when a new Go Date is created, accepted, or cancelled.
+ */
+export const invalidateGoDateGlobalCache = async (country, city) => {
+  if (!redisClient || !redisClient.isOpen) return;
+  if (typeof redisClient.keys !== "function") return;
+  try {
+    const safeCountry = (country || "").toLowerCase();
+    const safeCity = (city || "").toLowerCase();
+    // Invalidate country/city caches for all categories and pages
+    const pattern = `${CACHE_PREFIXES.MATCHES}:global:go_dates_browse_${safeCountry}_${safeCity}_*`;
+    const keys = await redisClient.keys(pattern);
+    if (Array.isArray(keys) && keys.length > 0) {
+      await redisClient.del(...keys);
+    }
+  } catch (error) {
+    console.error("Invalidate go-date global cache error:", error);
+  }
+};

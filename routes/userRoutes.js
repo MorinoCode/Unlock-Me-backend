@@ -26,17 +26,18 @@ import { checkUserReady } from "../controllers/user/userStatus.js";
 import { triggerAnalysisWorkers } from "../controllers/user/triggerAnalysis.js";
 import { validateSignup, validateSignin, validateUpdateProfile, validateUpdatePassword } from "../middleware/validation.js";
 import { requestVerification } from "../controllers/verificationController/verificationController.js";
+import { verifyTurnstile } from "../middleware/turnstileMiddleware.js";
 import multer from "multer";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 const router = express.Router();
 
-router.post("/signin", authLimiter, validateSignin, signinUser);
-router.post("/signup", authLimiter, validateSignup, signupUser);
+router.post("/signin", authLimiter, verifyTurnstile, validateSignin, signinUser);
+router.post("/signup", authLimiter, verifyTurnstile, validateSignup, signupUser);
 router.post("/signout", authLimiter, signoutUser);
 router.post("/refresh-token", refreshToken); // ✅ Security Fix: Token refresh endpoint
-router.post("/forgot-password", authLimiter, forgotPassword);
+router.post("/forgot-password", authLimiter, verifyTurnstile, forgotPassword);
 router.post("/deletion-request", authLimiter, requestAccountDeletion); // ✅ Google Play Compliance
 
 router.get("/ready", protect, checkUserReady); // ✅ Check if user is ready

@@ -15,6 +15,7 @@ const goDateSchema = new mongoose.Schema({
   description: { type: String, maxlength: 500 },
   dateTime: { type: Date, required: true },
   location: {
+    country: { type: String, required: true },
     city: { type: String, required: true },
     generalArea: { type: String, required: true },
     exactAddress: { type: String, required: true },
@@ -61,6 +62,7 @@ const goDateSchema = new mongoose.Schema({
 
 goDateSchema.index({
   status: 1,
+  "location.country": 1,
   "location.city": 1,
   category: 1,
   dateTime: 1,

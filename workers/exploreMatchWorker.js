@@ -85,12 +85,15 @@ export async function generateAnalysisData(userId) {
         const countryKey = (userCountry).trim().toLowerCase();
         if (currentUser.location?.coordinates && currentUser.location.coordinates[0] !== 0) {
            const nearbyIds = await redisClient.geoSearch(`users:locations:${countryKey}`, { member: userId.toString() }, { radius: 100, unit: 'km' }, { COUNT: SECTION_SIZE + 50 });
-           if (nearbyIds && nearbyIds.length > 0) {
-               const validIds = nearbyIds.filter(id => !excludedIds.includes(id) && id !== userId.toString()).slice(0, SECTION_SIZE);
-               if (validIds.length > 0) {
-                   nearYou = await User.find({ _id: { $in: validIds } }).select(projection).lean();
-               }
-           }
+            if (nearbyIds && nearbyIds.length > 0) {
+                const preFilteredIds = nearbyIds.filter(id => !excludedIds.includes(id) && id !== userId.toString());
+                if (preFilteredIds.length > 0) {
+                    nearYou = await User.find({ ...baseQuery, _id: { $in: preFilteredIds } })
+                        .select(projection)
+                        .limit(SECTION_SIZE)
+                        .lean();
+                }
+            }
         }
     } catch(e) { console.error("[AnalysisWorker] Redis GEO fail", e.message); }
 
@@ -115,9 +118,12 @@ export async function generateAnalysisData(userId) {
         const countryKey = (userCountry).trim().toLowerCase();
         const recentIds = await redisClient.zRange(`users:fresh:${countryKey}`, 0, SECTION_SIZE + 100, { REV: true });
         if (recentIds && recentIds.length > 0) {
-             const validIds = recentIds.filter(id => !excludedWithNearYou.includes(id) && id !== userId.toString()).slice(0, SECTION_SIZE);
-             if (validIds.length > 0) {
-                 freshFaces = await User.find({ _id: { $in: validIds } }).select(projection).lean();
+             const preFilteredIds = recentIds.filter(id => !excludedWithNearYou.includes(id) && id !== userId.toString());
+             if (preFilteredIds.length > 0) {
+                 freshFaces = await User.find({ ...baseQuery, _id: { $in: preFilteredIds } })
+                    .select(projection)
+                    .limit(SECTION_SIZE)
+                    .lean();
              }
         }
     } catch(e) { console.error("[AnalysisWorker] Redis ZSET fail", e.message); }

@@ -2,6 +2,19 @@ import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import redisClient from "../config/redis.js"; // ✅ CRITICAL FIX #1: Redis cache for auth
 
+// ✅ Debounced lastActiveAt updater — max 1 DB write per user per 5 min
+// Uses an in-memory Map: does NOT need Redis. Completely non-blocking.
+const _lastActiveDebounce = new Map();
+const ACTIVE_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
+function updateLastActive(userId) {
+  const now = Date.now();
+  const last = _lastActiveDebounce.get(userId) || 0;
+  if (now - last < ACTIVE_DEBOUNCE_MS) return; // already updated recently
+  _lastActiveDebounce.set(userId, now);
+  // Fire-and-forget: does NOT block the request
+  User.findByIdAndUpdate(userId, { lastActiveAt: new Date() }).catch(() => {});
+}
+
 // ✅ CRITICAL FIX #1 — Cache authenticated user in Redis for 5 min
 // Prevents a DB query on EVERY API request. At 1M users = 90% fewer MongoDB reads.
 const getUserFromCache = async (userId) => {
@@ -173,6 +186,9 @@ export const protect = async (req, res, next) => {
 
     // Cache user for 5 minutes (skip caching refreshToken field)
     await cacheUser(userObj._id.toString(), userObj);
+
+    // ✅ Track lastActiveAt — fire-and-forget, debounced to max once every 5 min
+    updateLastActive(userObj._id.toString());
 
     req.user = userObj;
     req.user.userId = userObj._id.toString();

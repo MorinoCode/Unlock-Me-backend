@@ -1,6 +1,6 @@
 import express from "express";
 import { handleCloudinaryWebhook } from "../controllers/webhookController/webhookController.js";
-import { handleRevenueCatWebhook } from "../controllers/paymentController/revenuecatController.js";
+import { revenueCatWebhook } from "../controllers/paymentController/paymentController.js";
 
 const router = express.Router();
 
@@ -8,6 +8,6 @@ const router = express.Router();
 router.post("/cloudinary", handleCloudinaryWebhook);
 
 // Route: POST /api/webhooks/revenuecat
-router.post("/revenuecat", handleRevenueCatWebhook);
+router.post("/revenuecat", revenueCatWebhook);
 
 export default router;

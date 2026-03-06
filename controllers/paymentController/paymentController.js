@@ -150,34 +150,37 @@ export const changePlan = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────
 export const revenueCatWebhook = async (req, res) => {
   try {
-    // ✅ Verify RevenueCat webhook secret
     const secret = process.env.REVENUECAT_WEBHOOK_SECRET;
     if (secret) {
-      const incomingSecret = req.headers["authorization"] || req.headers["x-revenuecat-secret"];
+      let incomingSecret = req.headers["authorization"] || req.headers["x-revenuecat-secret"];
+      
+      // Clean "Bearer " prefix if present in header
+      if (incomingSecret && incomingSecret.toLowerCase().startsWith("bearer ")) {
+        incomingSecret = incomingSecret.slice(7);
+      }
+
       if (incomingSecret !== secret && process.env.NODE_ENV === "production") {
         console.warn("[RevenueCat Webhook] ❌ Invalid secret");
         return res.status(401).json({ error: "Unauthorized" });
       }
     }
 
-    const { event } = req.body;
-    if (!event) return res.status(400).json({ error: "Missing event" });
-
-    // Ensure we have required data
-    if (!event.id || !event.app_user_id || !event.type) {
-        console.warn("[RevenueCat Webhook] ❌ Malformed event received");
+    // RevenueCat usually sends { event: { ... } } or just the event itself.
+    // We normalize it here.
+    const event = req.body.event || req.body;
+    
+    if (!event || !event.id || !event.type) {
+        console.warn("[RevenueCat Webhook] ❌ Missing or malformed event payload");
         return res.status(400).json({ error: "Malformed event" });
     }
 
-    // ✅ Fast Response: Immediately push to BullMQ background processor
+    // ✅ Fast Response: Push to BullMQ background processor
     await addToRevenueCatQueue({ event });
 
-    // Respond 200 OK immediately to acknowledge receipt to RevenueCat
     return res.status(200).json({ received: true });
   } catch (err) {
-    console.error("[RevenueCat Webhook] Queue Error:", err);
-    // Even if queuing fails, we let RC retry by throwing 500
-    return res.status(500).json({ error: "Webhook enqueue failed" });
+    console.error("[RevenueCat Webhook] Error:", err);
+    return res.status(500).json({ error: "Webhook processing failed" });
   }
 };
 

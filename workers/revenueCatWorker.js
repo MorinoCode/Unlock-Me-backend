@@ -44,9 +44,34 @@ const processRevenueCatWebhook = async (job) => {
   }
 
   try {
-    const user = await User.findById(app_user_id);
+    const isTestEvent = type === "TEST";
+    if (isTestEvent) {
+      console.log(`[RevenueCat Worker] ✅ Test event ${id} received and acknowledged.`);
+      await PaymentLog.findOneAndUpdate({ eventId: id }, { $set: { status: "processed" } });
+      return;
+    }
+
+    if (!app_user_id) {
+       throw new Error(`Event ${id} has no app_user_id`);
+    }
+
+    // Safe MongoDB Query: Prevent CastError if app_user_id is not a valid ObjectId
+    const isObjectId = /^[0-9a-fA-F]{24}$/.test(app_user_id);
+    
+    let user;
+    if (isObjectId) {
+      user = await User.findById(app_user_id);
+    }
+    
     if (!user) {
-      throw new Error(`User ${app_user_id} not found in database.`);
+      // Try searching by revenueCatId if not found by primary ID
+      user = await User.findOne({ "subscription.revenueCatId": app_user_id });
+    }
+
+    if (!user) {
+      console.warn(`[RevenueCat Worker] User ${app_user_id} not found. Skipping.`);
+      await PaymentLog.findOneAndUpdate({ eventId: id }, { $set: { status: "skipped", errorLog: "User not found" } });
+      return;
     }
 
     const productLower = (product_id || "").toLowerCase();

@@ -34,7 +34,6 @@ const BATCH_SIZE      = 50;           // users processed per batch
 const BATCH_DELAY_MS  = 200;          // pause between batches (ms) — keeps CPU cool
 const STALE_DAYS      = 7;            // recompute after 7 days
 const ACTIVE_HOURS    = 48;           // only process users active in last 48h
-const REDIS_TTL_SECS  = 7 * 24 * 3600; // 1 week Redis TTL
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

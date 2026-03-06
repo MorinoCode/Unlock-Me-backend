@@ -112,6 +112,20 @@ const userSchema = new mongoose.Schema(
     // ✅ Unlock Feature Persistence
     unlockedProfiles: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
+    // ✅ Pre-computed Soulmate Matches (Updated weekly by soulmateWorker)
+    soulmateMatches: {
+      list: [
+        {
+          user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+          score: { type: Number }, // e.g. 94
+        }
+      ],
+      calculatedAt: { type: Date, default: null }, // null = never computed
+    },
+
+    // ✅ Tracks last API activity for smart worker scheduling
+    lastActiveAt: { type: Date, default: Date.now },
+
     interests: [String],
     avatar: { type: String, default: "" },
 
@@ -195,6 +209,10 @@ userSchema.index({ createdAt: -1 }); // For sorting by newest
 userSchema.index({ "location.country": 1, gender: 1, dna: 1 });
 // ✅ Explore "nearby" + sort by new: country + city + createdAt
 userSchema.index({ "location.country": 1, "location.city": 1, createdAt: -1 });
+// ✅ soulmateWorker: filter active paid users (subscription.plan + lastActiveAt)
+userSchema.index({ "subscription.plan": 1, lastActiveAt: -1 });
+// ✅ soulmateWorker: stale check — who needs recomputing
+userSchema.index({ "soulmateMatches.calculatedAt": 1 });
 
 const User = mongoose.model("User", userSchema);
 export default User;

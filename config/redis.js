@@ -82,12 +82,19 @@ if (rawUrl) {
 }
 
 // ✅ BullMQ connection (ioredis standard)
-export const bullMQConnection = parsedBullMQConnection || {
-  host: process.env.REDIS_HOST || "127.0.0.1",
-  port: parseInt(process.env.REDIS_PORT) || 6379,
-  maxRetriesPerRequest: null,
-  ...(parseInt(process.env.REDIS_PORT) === 6380 && { tls: {} })
-};
+// ⚠️  keepAlive (ms): Enables TCP SO_KEEPALIVE at socket level.
+//    This prevents cloud LB/firewalls from silently dropping idle connections (ECONNRESET).
+//    5000ms = send a TCP keepalive probe every 5 seconds on idle connections.
+export const bullMQConnection = parsedBullMQConnection
+  ? { ...parsedBullMQConnection, keepAlive: 5000 }
+  : {
+      host: process.env.REDIS_HOST || "127.0.0.1",
+      port: parseInt(process.env.REDIS_PORT) || 6379,
+      maxRetriesPerRequest: null,
+      keepAlive: 5000,
+      ...(parseInt(process.env.REDIS_PORT) === 6380 && { tls: {} })
+    };
+
 
 console.log("📦 [Redis] Final bullMQConnection host:", bullMQConnection.host ? (bullMQConnection.host.substring(0, 5) + "...") : "NOT SET");
 console.log("------------------------------\n");

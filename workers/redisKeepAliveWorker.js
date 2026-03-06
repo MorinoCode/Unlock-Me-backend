@@ -10,7 +10,9 @@ import redisClient from "../config/redis.js";
 
 let isRunning = false;
 
-cron.schedule("0 */6 * * *", async () => {
+// ✅ Run every 5 minutes — must be shorter than cloud LB idle timeout (~10-15 min)
+// Previous: every 6 hours — was completely ineffective against TCP idle drops (ECONNRESET)
+cron.schedule("*/5 * * * *", async () => {
   if (isRunning) {
     console.log("⏰ Redis Keep-Alive: Already running, skipping...");
     return;

@@ -1,6 +1,7 @@
 import User from "../models/User.js";
 import { getSoulmatePermissions } from "../utils/subscriptionRules.js";
 import { calculateCompatibility } from "../utils/matchUtils.js";
+import redisClient from "../config/redis.js";
 
 // ✅ Pagination Workers for "See More" Pages
 
@@ -222,81 +223,130 @@ export async function loadMoreCompatibilityVibes(userId, page = 1, limit = 20) {
   }
 }
 
-// 5. Load More Soulmates (DNA Calculation + Subscription Limits)
-export async function loadMoreSoulmates(userId, page = 1, limit = 20, userPlan = "free") {
+// 5. Load More Soulmates — reads pre-computed list (soulmateWorker.js feeds this)
+// ✅ Zero calculateCompatibility calls at request time
+export async function loadMoreSoulmates(userId, page = 1, limit = 10, userPlan = "free") {
   try {
-    // Check subscription
+    // 1. Gate: FREE plan users cannot see soulmates
     const { isLocked, limit: planLimit } = getSoulmatePermissions(userPlan);
-    
     if (isLocked) {
       throw new Error("Premium subscription required for Soulmates");
     }
 
-    const currentUser = await User.findById(userId)
-      .select("location lookingFor dna likedUsers dislikedUsers matches blockedUsers questionsbycategoriesResults")
-      .lean();
+    // 2. Try Redis cache first (TTL: 7 days)
+    const cacheKey = `soulmates:${userId}`;
 
-    if (!currentUser) throw new Error("User not found");
-    if (!currentUser.dna) throw new Error("User DNA not calculated");
+    let list = null;
+    try {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) list = JSON.parse(cached);
+    } catch { /* Redis miss — fall through */ }
 
-    const excludedIds = [
-      userId,
-      ...(currentUser.matches || []),
-      ...(currentUser.likedUsers || []),
-      ...(currentUser.dislikedUsers || []),
-      ...(currentUser.blockedUsers || [])
-    ];
+    // 3. If not in Redis, read from MongoDB
+    if (!list) {
+      const me = await User.findById(userId)
+        .select("soulmateMatches subscription location lookingFor dna matches likedUsers dislikedUsers blockedUsers questionsbycategoriesResults")
+        .lean();
 
-    const query = {
-      _id: { $nin: excludedIds },
-      "location.country": currentUser.location?.country,
-      dna: { $exists: true, $ne: null }
-    };
+      if (!me) throw new Error("User not found");
 
-    if (currentUser.lookingFor) {
-      query.gender = currentUser.lookingFor;
+      const computed = me.soulmateMatches;
+      const hasValidList = computed?.list?.length > 0 && computed?.calculatedAt;
+
+      if (hasValidList) {
+        // ✅ Use pre-computed list — no calculation needed
+        list = computed.list;
+
+        // Cache in Redis for 7 days
+        redisClient.setEx(cacheKey, 7 * 24 * 3600, JSON.stringify(list)).catch(() => {});
+
+      } else {
+        // 4. Fallback: list not yet computed — run a one-time sync computation
+        // This only happens on first ever access (before worker has run)
+        console.log(`[Soulmates] ⚡ No pre-computed list for ${userId}. Running one-time sync...`);
+
+        const plan = userPlan.toLowerCase();
+        const fetchSize = (plan === "gold" ? 50 : plan === "platinum" ? 100 : 200);
+
+        const excludedIds = [
+          me._id,
+          ...(me.matches       || []),
+          ...(me.likedUsers    || []),
+          ...(me.dislikedUsers || []),
+          ...(me.blockedUsers  || []),
+        ];
+
+        const query = {
+          _id:                { $nin: excludedIds },
+          "location.country": me.location?.country,
+          dna:                { $exists: true, $ne: null },
+          "dna.Logic":        { $exists: true, $type: "number" },
+        };
+        if (me.lookingFor) query.gender = me.lookingFor;
+
+        const candidates = await User.find(query)
+          .select("dna questionsbycategoriesResults interests location gender birthday")
+          .limit(fetchSize)
+          .lean();
+
+        const scored = candidates
+          .map((c) => ({ user: c._id, score: calculateCompatibility(me, c) }))
+          .filter((c) => c.score >= 90)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, planLimit === Infinity ? 40 : planLimit);
+
+        list = scored;
+
+        // Persist to MongoDB so worker doesn't need to run first
+        User.findByIdAndUpdate(userId, {
+          $set: {
+            "soulmateMatches.list":         scored,
+            "soulmateMatches.calculatedAt": new Date(),
+          },
+        }).catch(() => {});
+
+        // Cache in Redis
+        redisClient.setEx(cacheKey, 7 * 24 * 3600, JSON.stringify(list)).catch(() => {});
+      }
     }
 
-    // Fetch candidates for DNA calculation
-    const candidates = await User.find(query)
-      .select("name avatar bio location birthday gender interests isVerified createdAt dna questionsbycategoriesResults")
-      .limit(500) // Fetch more for filtering
+    // 5. Apply plan limit
+    const cap = planLimit === Infinity ? list.length : planLimit;
+    const limitedList = list.slice(0, cap);
+
+    // 6. Paginate
+    const skip = (page - 1) * limit;
+    const pageSlice = limitedList.slice(skip, skip + limit);
+
+    if (!pageSlice.length) {
+      return { users: [], hasMore: false, totalCount: limitedList.length, currentPage: page, totalPages: Math.ceil(limitedList.length / limit), planLimit };
+    }
+
+    // 7. Fetch full user profiles for the page slice only
+    const userIds = pageSlice.map((m) => m.user);
+    const users = await User.find({ _id: { $in: userIds } })
+      .select("name avatar bio location birthday gender interests isVerified createdAt")
       .lean();
 
-    // Calculate DNA compatibility
-    const withScores = candidates.map(candidate => ({
-      ...candidate,
-      matchScore: calculateCompatibility(currentUser, candidate)
-    }));
-
-    // Filter > 90% match
-    const soulmates = withScores
-      .filter(u => u.matchScore > 90)
-      .sort((a, b) => b.matchScore - a.matchScore);
-
-    // Apply plan limit
-    const limitedSoulmates = planLimit === Infinity 
-      ? soulmates 
-      : soulmates.slice(0, planLimit);
-
-    // Pagination
-    const skip = (page - 1) * limit;
-    const paginatedUsers = limitedSoulmates.slice(skip, skip + limit);
-
-    // Remove matchScore from response (keep it internal)
-    const cleanUsers = paginatedUsers.map((u) => {
-      const { matchScore: _, ...rest } = u; // eslint-disable-line no-unused-vars
-      return rest;
-    });
+    // 8. Attach score + preserve order
+    const scoreMap = new Map(pageSlice.map((m) => [m.user.toString(), m.score]));
+    const orderedUsers = userIds
+      .map((id) => {
+        const u = users.find((u) => u._id.toString() === id.toString());
+        if (!u) return null;
+        return { ...u, matchScore: scoreMap.get(id.toString()) };
+      })
+      .filter(Boolean);
 
     return {
-      users: cleanUsers,
-      hasMore: skip + limit < limitedSoulmates.length,
-      totalPages: Math.ceil(limitedSoulmates.length / limit),
+      users: orderedUsers,
+      hasMore: skip + limit < limitedList.length,
+      totalPages: Math.ceil(limitedList.length / limit),
       currentPage: page,
-      totalCount: limitedSoulmates.length,
-      planLimit
+      totalCount: limitedList.length,
+      planLimit,
     };
+
   } catch (error) {
     console.error("[loadMoreSoulmates] Error:", error);
     throw error;

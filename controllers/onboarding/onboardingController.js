@@ -337,6 +337,35 @@ export const saveLocation = async (req, res) => {
       coordinates: updatedUser.location.coordinates,
     });
 
+    // 🌍 Sync to Redis Geospatial & Fresh ZSET for O(logN) Explore matching
+    try {
+      const redisClient = (await import("../../config/redis.js")).default;
+      if (redisClient && redisClient.isOpen) {
+        const countryKey = (updatedUser.location.country || "World").trim().toLowerCase();
+        const geoKey = `users:locations:${countryKey}`;
+        const freshKey = `users:fresh:${countryKey}`;
+        const userIdStr = updatedUser._id.toString();
+
+        if (updatedUser.location.coordinates[0] !== 0 || updatedUser.location.coordinates[1] !== 0) {
+            // Add to Geographic Index (Longitude, Latitude, Name)
+            await redisClient.geoAdd(geoKey, {
+                longitude: updatedUser.location.coordinates[0],
+                latitude: updatedUser.location.coordinates[1],
+                member: userIdStr
+            });
+        }
+
+        // Add to Fresh Faces ZSET (Score is Date.now())
+        await redisClient.zAdd(freshKey, {
+            score: Date.now(),
+            value: userIdStr
+        });
+        console.log(`[Onboarding] ✅ Synced User ${userIdStr} to Redis Indexes`);
+      }
+    } catch (e) {
+      console.error("[Onboarding] Redis Sync Error:", e);
+    }
+
     // ❌ REMOVED: Worker execution moved to Analysis Page
     // Workers will be triggered when user reaches Analysis Page
 

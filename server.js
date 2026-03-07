@@ -55,7 +55,17 @@ import "./workers/notificationWorker.js"; // ✅ NEW: Enterprise Notification Wo
 import "./workers/mediaWorker.js"; // ✅ NEW: Enterprise Media Worker
 import "./workers/onboardingWorker.js"; // ✅ NEW: Enterprise Onboarding Worker
 import "./workers/revenueCatWorker.js"; // ✅ NEW: Async RevenueCat Webhook Processor
+import "./workers/messageWorker.js"; // ✅ NEW: Async Message Queue Worker
 
+// ✅ Soulmate Worker — weekly cron (Sunday 02:00 UTC, runs only for eligible users)
+import cron from "node-cron";
+import { runSoulmateWorker } from "./workers/soulmateWorker.js";
+cron.schedule("0 2 * * 0", () => {
+  console.log("[Cron] 🔮 Weekly soulmateWorker triggered");
+  runSoulmateWorker().catch((err) =>
+    console.error("[Cron] SoulmateWorker error:", err.message)
+  );
+});
 
 import { Worker } from "worker_threads";
 
@@ -120,6 +130,10 @@ const setupRedisSubscriber = async () => {
         } else if (event.type === 'ONBOARDING_PROCESSED') {
           console.log(`🧬 [Socket] Emit Onboarding Processed to user ${event.userId}`);
           io.to(event.userId).emit("onboarding_processed", event.payload);
+        } else if (event.type === 'NEW_CHAT_MESSAGE') {
+          // ✅ Distribute to all devices for receiver and sender
+          io.to(event.receiverId).emit("receive_message", event.message);
+          // Omit sending to sender because sender's UI updates optimistically, unless needed.
         }
       }
     } catch (err) {
@@ -233,8 +247,6 @@ app.use("/api/user/unblock", strictLimiter);
 // ==========================================
 // 3. BODY PARSING
 // ==========================================
-app.use("/api/webhook", webhookRoutes);
-
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 app.use(cookieParser());
@@ -318,8 +330,11 @@ app.set("io", io);
 
 const userSocketMap = new Map();
 
+// ✅ FIX #5: Updated to work with Set-based userSocketMap (multi-device support)
 export const getReceiverSocketId = (receiverId) => {
-  return userSocketMap.get(receiverId);
+  const socketSet = userSocketMap.get(receiverId);
+  if (!socketSet || socketSet.size === 0) return undefined;
+  return socketSet.values().next().value; // Return first active socket
 };
 
 // ✅ Security Fix #9: Socket authentication middleware
@@ -493,9 +508,21 @@ process.on("unhandledRejection", (reason, promise) => {
 });
 
 // ✅ Critical Fix: Handle uncaught exceptions
+// ⚠️  IMPORTANT: ECONNRESET is a non-fatal, transient TCP network error.
+//    It happens when a cloud LB/firewall silently drops an idle TCP connection.
+//    Redis has a built-in reconnect strategy — we must NOT crash the process.
+//    Only truly fatal errors (corrupt state, unrecoverable logic errors) should
+//    trigger a graceful shutdown.
+const NON_FATAL_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT"]);
+
 process.on("uncaughtException", (error) => {
+  if (NON_FATAL_CODES.has(error.code)) {
+    // Non-fatal: log and let the connection layer (Redis/socket-io) handle reconnect
+    console.warn(`⚠️ Non-fatal uncaughtException [${error.code}] — ignoring, Redis will reconnect:`, error.message);
+    return;
+  }
+  // Truly fatal: unknown error type, safer to restart
   console.error("🔥 Uncaught Exception:", error);
-  // For uncaught exceptions, it's safer to exit gracefully
   gracefulShutdown("UNCAUGHT_EXCEPTION");
 });
 

@@ -15,7 +15,7 @@ export const getSoulmatePermissions = (plan) => {
 
   switch (normalizedPlan) {
     case PLANS.DIAMOND:
-      return { isLocked: false, limit: Infinity }; // ✅ Unlimited Soulmates
+      return { isLocked: false, limit: 40 }; // ✅ 40 Soulmates for Diamond
     case PLANS.PLATINUM:
       return { isLocked: false, limit: 10 };
     case PLANS.GOLD:

@@ -2,9 +2,8 @@ import BlindSession from "../models/BlindSession.js";
 import BlindQuestion from "../models/BlindQuestion.js";
 import Conversation from "../models/Conversation.js";
 import mongoose from "mongoose"; // ✅ Critical Fix: For transactions
-import redisClient from "../config/redis.js"; // ✅ New: For Redis Queue
 
-import { addToQueue } from "../utils/blindDateService.js";
+import { addToQueue, leaveQueue } from "../utils/blindDateService.js";
 
 // ✅ No more local blindQueue array or local locks.
 // Redis sharding and atomic updates are handled in blindDateService.
@@ -15,12 +14,13 @@ import { addToQueue } from "../utils/blindDateService.js";
 export const handleSocketConnection = (io, socket, userSocketMap) => {
   const userId = socket.handshake.query.userId;
 
+  // ✅ FIX #5: Support multi-device — store a Set of socketIds per userId
   if (userId && userId !== "undefined") {
     socket.userId = userId;
     socket.join(userId);
-    userSocketMap.set(userId, socket.id);
+    if (!userSocketMap.has(userId)) userSocketMap.set(userId, new Set());
+    userSocketMap.get(userId).add(socket.id);
   }
-
 
   // Handle join_room event (for userId room joining)
   socket.on("join_room", (userId) => {
@@ -28,7 +28,8 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
     const roomName = String(userId);
     socket.userId = roomName;
     socket.join(roomName);
-    userSocketMap.set(roomName, socket.id);
+    if (!userSocketMap.has(roomName)) userSocketMap.set(roomName, new Set());
+    userSocketMap.get(roomName).add(socket.id);
     console.log(`[Socket] User ${userId} joined room: ${roomName}, socket ID: ${socket.id}`);
   });
 
@@ -75,50 +76,59 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
   });
 
   socket.on("leave_blind_queue", async () => {
-    // Migrated to Redis-safe cleanup (handled on disconnect or explicit leave)
+    // Migrated to Redis-safe cleanup O(1)
     const country = socket.userCountry || "World";
-    const QUEUE_KEY = `blind_date:queue:${country.trim().toLowerCase()}`;
-    
-    const rawQueue = await redisClient.lRange(QUEUE_KEY, 0, -1);
-    for (const item of rawQueue) {
-        const u = JSON.parse(item);
-        if (u.userId.toString() === socket.userId?.toString()) {
-            await redisClient.lRem(QUEUE_KEY, 1, item);
-            break;
-        }
-    }
-    console.log(`[Blind Queue] User ${socket.userId} left queue`);
+    await leaveQueue(socket.userId, country);
+    console.log(`[Blind Queue] User ${socket.userId} left queue explicitly`);
   });
 
   socket.on("confirm_instructions", async ({ sessionId }) => {
     try {
-      const session = await BlindSession.findById(sessionId);
-      if (!session) return;
-      const isUser1 = session.participants[0].toString() === socket.userId;
-      if (isUser1) session.stageProgress.u1InstructionRead = true;
-      else session.stageProgress.u2InstructionRead = true;
+      // ✅ CRITICAL FIX #2: Fully atomic — determine user key + set flag in ONE query.
+      // First, identify which participant this socket is (no separate read needed).
+      const sessionCheck = await BlindSession.findOne(
+        { _id: sessionId, status: "instructions" }
+      ).select("participants stageProgress");
+      if (!sessionCheck) return; // Already transitioned or doesn't exist
 
-      if (
-        session.stageProgress.u1InstructionRead &&
-        session.stageProgress.u2InstructionRead
-      ) {
-        session.status = "active";
-        session.currentStage = 1;
+      const isUser1 = sessionCheck.participants[0].toString() === socket.userId;
+      const isUser2 = sessionCheck.participants[1].toString() === socket.userId;
+      if (!isUser1 && !isUser2) return; // Not a participant
+
+      const userKey = isUser1 ? "u1InstructionRead" : "u2InstructionRead";
+      const otherKey = isUser1 ? "u2InstructionRead" : "u1InstructionRead";
+      const otherAlreadyRead = sessionCheck.stageProgress?.[otherKey] === true;
+
+      if (otherAlreadyRead) {
+        // ✅ ATOMIC: Both ready — transition status AND set flag in ONE operation.
+        // The status filter `"instructions"` guarantees only ONE server wins this race.
+        const activeSession = await BlindSession.findOneAndUpdate(
+          { _id: sessionId, status: "instructions" },
+          { $set: { [`stageProgress.${userKey}`]: true, status: "active", currentStage: 1 } },
+          { new: true }
+        ).populate("questions.questionId");
+
+        if (activeSession) {
+          io.to(activeSession.participants[0].toString()).emit("session_update", activeSession);
+          io.to(activeSession.participants[1].toString()).emit("session_update", activeSession);
+        }
+        // If activeSession is null, another server already did the transition — no-op is correct.
+        return;
       }
-      await session.save();
-      const updatedSession = await BlindSession.findById(sessionId).populate(
-        "questions.questionId"
-      );
-      io.to(session.participants[0].toString()).emit(
-        "session_update",
-        updatedSession
-      );
-      io.to(session.participants[1].toString()).emit(
-        "session_update",
-        updatedSession
-      );
+
+      // Only this user confirmed so far — just set their flag
+      const updatedSession = await BlindSession.findOneAndUpdate(
+        { _id: sessionId, status: "instructions" },
+        { $set: { [`stageProgress.${userKey}`]: true } },
+        { new: true }
+      ).populate("questions.questionId");
+
+      if (updatedSession) {
+        io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
+        io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
+      }
     } catch (err) {
-      console.error(err);
+      console.error("Confirm Instructions Error:", err);
     }
   });
 
@@ -209,23 +219,24 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
 
   socket.on("proceed_to_next_stage", async ({ sessionId }) => {
     try {
-      const session = await BlindSession.findById(sessionId);
-      if (!session) return;
-      const isUser1 = session.participants[0].toString() === socket.userId;
-      if (isUser1) session.stageProgress.u1ReadyNext = true;
-      else session.stageProgress.u2ReadyNext = true;
+      const sessionInfo = await BlindSession.findById(sessionId).select('participants status currentStage');
+      if (!sessionInfo || !["active", "waiting_for_stage_2", "waiting_for_stage_3"].includes(sessionInfo.status)) return;
 
-      if (
-        session.stageProgress.u1ReadyNext &&
-        session.stageProgress.u2ReadyNext
-      ) {
-        session.currentStage += 1;
-        session.status = "active";
-        session.currentQuestionIndex += 1;
-        session.stageProgress.u1ReadyNext = false;
-        session.stageProgress.u2ReadyNext = false;
+      const isUser1 = sessionInfo.participants[0].toString() === socket.userId;
+      const userKey = isUser1 ? 'u1ReadyNext' : 'u2ReadyNext';
 
-        if (session.currentStage === 2) {
+      let updatedSession = await BlindSession.findOneAndUpdate(
+        { _id: sessionId },
+        { $set: { [`stageProgress.${userKey}`]: true } },
+        { new: true }
+      ).populate("questions.questionId");
+
+      if (updatedSession.stageProgress.u1ReadyNext && updatedSession.stageProgress.u2ReadyNext) {
+        
+        // Prepare questions if advancing to stage 2
+        let updateQuery = { $set: { status: "active", 'stageProgress.u1ReadyNext': false, 'stageProgress.u2ReadyNext': false }, $inc: { currentStage: 1, currentQuestionIndex: 1 } };
+        
+        if (updatedSession.currentStage === 1) {
           const nextQuestions = await BlindQuestion.aggregate([
             { $match: { stage: 2 } },
             { $sample: { size: 5 } },
@@ -235,21 +246,26 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
             u1Answer: null,
             u2Answer: null,
           }));
-          session.questions.push(...newQs);
+          updateQuery.$push = { questions: { $each: newQs } };
+        }
+
+        const activeSession = await BlindSession.findOneAndUpdate(
+          { _id: sessionId, status: updatedSession.status }, // atomic transition check
+          updateQuery,
+          { new: true }
+        ).populate("questions.questionId");
+
+        if (activeSession) {
+          io.to(activeSession.participants[0].toString()).emit("session_update", activeSession);
+          io.to(activeSession.participants[1].toString()).emit("session_update", activeSession);
+          return;
         }
       }
-      await session.save();
-      const updatedSession = await BlindSession.findById(sessionId).populate(
-        "questions.questionId"
-      );
-      io.to(session.participants[0].toString()).emit(
-        "session_update",
-        updatedSession
-      );
-      io.to(session.participants[1].toString()).emit(
-        "session_update",
-        updatedSession
-      );
+
+      // If not transitioning, broadcast the ready status
+      io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
+      io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
+
     } catch (err) {
       console.error("Proceed Error:", err);
     }
@@ -360,23 +376,9 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
 
   socket.on("disconnect", async () => {
     if (socket.userId) {
-      // 1. Remove from Redis Blind Queue (Sharded)
+      // 1. Remove from Redis Blind Queue (Sharded) O(1)
       const country = socket.userCountry || "World";
-      const QUEUE_KEY = `blind_date:queue:${country.trim().toLowerCase()}`;
-      
-      try {
-          const rawQueue = await redisClient.lRange(QUEUE_KEY, 0, -1);
-          for (const item of rawQueue) {
-              const u = JSON.parse(item);
-              if (u.userId.toString() === socket.userId?.toString()) {
-                  await redisClient.lRem(QUEUE_KEY, 1, item);
-                  console.log(`[Socket] 🗑️ User ${socket.userId} removed from Redis ${country} queue on disconnect`);
-                  break;
-              }
-          }
-      } catch (err) {
-          console.error("[Socket] Disconnect Cleanup Error:", err);
-      }
+      await leaveQueue(socket.userId, country);
 
       // 2. Identify and Notify/Cancel Active Blind Sessions
       try {
@@ -403,10 +405,15 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
           console.error("[Socket] Session Cleanup Error:", err);
       }
 
-      userSocketMap.delete(socket.userId);
+      // ✅ FIX #5: Multi-device cleanup — only remove THIS socket from the Set
+      const socketSet = userSocketMap.get(socket.userId);
+      if (socketSet) {
+        socketSet.delete(socket.id);
+        if (socketSet.size === 0) userSocketMap.delete(socket.userId);
+      }
       const roomName = String(socket.userId);
       socket.leave(roomName);
-      console.log(`[Socket] Room ${roomName} left by user ${socket.userId}`);
+      console.log(`[Socket] Room ${roomName} left by socket ${socket.id} (user ${socket.userId})`);
     }
     console.log(`👋 User disconnected: ${socket.userId || socket.id}`);
   });

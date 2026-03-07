@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import User from "../models/User.js";
 import redisClient, { bullMQConnection } from "../config/redis.js";
+import { calculateCompatibility } from "../utils/matchUtils.js";
 
 // const FEED_SIZE = 100;
 // const REFILL_THRESHOLD = 20;
@@ -27,20 +28,27 @@ export async function generateFeedForUser(currentUser) {
               $match: { 
                   _id: { $nin: excludedIds },
                   "location.country": currentUser.location?.country || "World",
+                  "dna": { $exists: true, $ne: null },
+                  "dna.Logic": { $exists: true, $type: "number" }
                   // gender: currentUser.lookingFor // optional, if strict
               } 
           },
           { $sample: { size: 50 } }, // Fetch batch
-          { $project: { _id: 1 } }
+          { $project: { _id: 1, dna: 1, interests: 1, birthday: 1, gender: 1, location: 1 } }
       ]);
 
       if (feed.length > 0) {
-          const feedIds = feed.map(u => u._id.toString());
-          const feedKey = `unlock:feed:${currentUser._id}`;
+          const feedKey = `unlock:feed:zset:${currentUser._id}`;
           
-          // Push to Redis (Right side - Append)
-          await redisClient.rPush(feedKey, feedIds);
-          console.log(`[unlockFeedWorker] ✅ Added ${feed.length} users to feed for ${currentUser._id}`);
+          // O(1) bulk push to Redis ZSET sorted by Match Score
+          const pipeline = redisClient.multi();
+          feed.forEach(candidate => {
+              const score = calculateCompatibility(currentUser, candidate);
+              pipeline.zAdd(feedKey, { score, value: candidate._id.toString() });
+          });
+          await pipeline.exec();
+          
+          console.log(`[unlockFeedWorker] ✅ Added ${feed.length} users to ZSET feed for ${currentUser._id}`);
           return true;
       } else {
           console.log(`[unlockFeedWorker] ⚠️ No new users found for ${currentUser._id}`);
@@ -57,9 +65,9 @@ const unlockFeedProcessor = async (job) => {
     const { userId } = job.data;
     console.log(`[unlockFeedWorker] ⚙️ Processing feed generation for ${userId}`);
     
-    // Fetch user details needed for feed generation
+    // Fetch user details needed for feed generation and scoring
     const user = await User.findById(userId).select(
-        "location lookingFor matches likedUsers dislikedUsers superLikedUsers blockedUsers blockedBy"
+        "location lookingFor matches likedUsers dislikedUsers superLikedUsers blockedUsers blockedBy dna interests birthday gender"
     ).lean();
 
     if (!user) {

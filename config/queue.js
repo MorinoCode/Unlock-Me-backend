@@ -47,7 +47,12 @@ const onboardingQueue = new Queue("onboarding-queue", {
   defaultJobOptions,
 });
 
-console.log("✅ [Queue] Analysis, Explore, GoDate, unlock, Notification, Media & Onboarding Queues Initialized");
+const messageQueue = new Queue("message-queue", {
+  connection: bullMQConnection,
+  defaultJobOptions,
+});
 
-export { analysisQueue, exploreQueue, godateQueue, unlockActionQueue, notificationQueue, mediaQueue, onboardingQueue };
+console.log("✅ [Queue] Analysis, Explore, GoDate, unlock, Notification, Media, Onboarding & Message Queues Initialized");
+
+export { analysisQueue, exploreQueue, godateQueue, unlockActionQueue, notificationQueue, mediaQueue, onboardingQueue, messageQueue };
 

@@ -423,7 +423,7 @@ export const handleRevealDecision = async (req, res) => {
             senderId: userId,
             senderName: "System",
             message:
-              "Congratulations! You both decided to reveal. It's a Match! 🔓",
+              "Congratulations! You both decided to reveal. Connection Unlocked! 🔓",
             targetId: conversation._id, // Redirect to chat
           });
         });

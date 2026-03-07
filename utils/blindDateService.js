@@ -4,8 +4,9 @@ import redisClient from '../config/redis.js';
 import User from '../models/User.js';
 import { calculateCompatibility } from './matchUtils.js';
 
-// ✅ Sharded Queue Keys
-const getQueueKey = (country) => `blind_date:queue:${(country || 'World').trim().toLowerCase()}`;
+// ✅ Sharded Keys for ZSET (Queue) and HASH (Payloads)
+const getQueueZsetKey = (country) => `blind_date:queue:zset:${(country || 'World').trim().toLowerCase()}`;
+const getQueueHashKey = (country) => `blind_date:queue:hash:${(country || 'World').trim().toLowerCase()}`;
 
 /**
  * Add a user to the sharded Redis queue and try to find a match.
@@ -15,41 +16,56 @@ export const addToQueue = async (userId, userCriteria) => {
   if (!userId) return { error: "User ID is required" };
 
   const country = userCriteria.location?.country || 'World';
-  const QUEUE_KEY = getQueueKey(country);
+  const ZSET_KEY = getQueueZsetKey(country);
+  const HASH_KEY = getQueueHashKey(country);
 
   try {
-    // 1. Fetch the sharded queue from Redis
-    const rawQueue = await redisClient.lRange(QUEUE_KEY, 0, -1);
-    const waitingQueue = rawQueue.map(item => JSON.parse(item));
+    // 1. Fetch current user ONCE to cache DNA/Interests into Redis
+    const me = await User.findById(userId).lean();
+    if (!me) return { error: "User not found" };
 
-    // 2. Prevent duplicate entries
-    const isAlreadyQueued = waitingQueue.some(u => u.userId.toString() === userId.toString());
+    const userIdStr = userId.toString();
+
+    // 2. Prevent duplicate entries using O(1) Hash check
+    const isAlreadyQueued = await redisClient.hExists(HASH_KEY, userIdStr);
     if (isAlreadyQueued) {
       return { status: "waiting", message: "Already in queue" };
     }
 
-    // 🔥 HIGH-SCALE FIX: Fetch current user ONCE to cache DNA/Interests into Redis
-    const me = await User.findById(userId).lean();
-    if (!me) return { error: "User not found" };
+    // 3. Fetch Top 150 oldest waiting users from ZSET (O(log(N) + M) instead of O(N))
+    const oldestWaitingIds = await redisClient.zRange(ZSET_KEY, 0, 150);
+    
+    // Filter out self if somehow stuck
+    const candidateIds = oldestWaitingIds.filter(id => id !== userIdStr);
 
-    // 3. Find Best DNA Match using In-Memory Redis data (O(1) DB calls)
-    const { match: partner, matchRawString } = await findBestMatch(me, userCriteria, waitingQueue, rawQueue);
+    let waitingQueue = [];
+    if (candidateIds.length > 0) {
+      // 4. Fetch their payloads from Hash Map (O(M))
+      const rawPayloads = await redisClient.hmGet(HASH_KEY, candidateIds);
+      waitingQueue = rawPayloads.filter(p => p).map(p => JSON.parse(p));
+    }
+
+    // 5. Find Best DNA Match using In-Memory data (O(1) DB calls)
+    const { match: partner } = await findBestMatch(me, userCriteria, waitingQueue);
 
     if (partner) {
-      // 4. ATOMIC REMOVAL
-      const removedCount = await redisClient.lRem(QUEUE_KEY, 1, matchRawString);
+      // 6. ATOMIC REMOVAL of partner
+      const removedCount = await redisClient.zRem(ZSET_KEY, partner.userId);
       
       if (removedCount === 0) {
         // Match lost to another server/process, fallback to adding self to queue
-        return await pushToQueue(me, userCriteria, QUEUE_KEY);
+        return await pushToQueue(me, userCriteria, ZSET_KEY, HASH_KEY);
       }
 
-      // 5. Create Session
+      // Partner successfully locked. Clean up their hash data
+      await redisClient.hDel(HASH_KEY, partner.userId);
+
+      // 7. Create Session
       const session = await createBlindSession(userId, partner.userId);
       return { status: "matched", session };
     } else {
-      // 6. No match found, push self to queue
-      return await pushToQueue(me, userCriteria, QUEUE_KEY);
+      // 8. No match found, push self to queue
+      return await pushToQueue(me, userCriteria, ZSET_KEY, HASH_KEY);
     }
   } catch (err) {
     console.error("BlindDateService Error:", err);
@@ -58,11 +74,12 @@ export const addToQueue = async (userId, userCriteria) => {
 };
 
 /**
- * Helper to push user to Redis queue with serialized payload for instant matching
+ * Helper to push user to Redis ZSET and HASH for instant matching (O(1))
  */
-const pushToQueue = async (me, criteria, queueKey) => {
+const pushToQueue = async (me, criteria, zsetKey, hashKey) => {
+  const userIdStr = me._id.toString();
   const newUserObj = { 
-    userId: me._id.toString(), 
+    userId: userIdStr, 
     age: criteria.age, 
     gender: criteria.gender, 
     lookingFor: criteria.lookingFor, 
@@ -74,19 +91,39 @@ const pushToQueue = async (me, criteria, queueKey) => {
     location: me.location || { city: "" },
     joinedAt: Date.now() 
   };
-  await redisClient.rPush(queueKey, JSON.stringify(newUserObj));
+  
+  // O(1) Insertion
+  await redisClient.hSet(hashKey, userIdStr, JSON.stringify(newUserObj));
+  await redisClient.zAdd(zsetKey, { score: Date.now(), value: userIdStr });
+  
   return { status: "waiting", message: "Waiting for a match..." };
+};
+
+/**
+ * Instantly removes a user from the queue (Disconnect/Cancel) O(1)
+ */
+export const leaveQueue = async (userId, country) => {
+  if (!userId) return;
+  const ZSET_KEY = getQueueZsetKey(country);
+  const HASH_KEY = getQueueHashKey(country);
+  
+  try {
+    const userIdStr = userId.toString();
+    await redisClient.zRem(ZSET_KEY, userIdStr);
+    await redisClient.hDel(HASH_KEY, userIdStr);
+    console.log(`[Blind Queue] Removed user ${userIdStr} from Redis ZSET/HASH (${country})`);
+  } catch (err) {
+    console.error("BlindDateService leaveQueue Error:", err);
+  }
 };
 
 /**
  * Finds the BEST match based on Gender, Age, and DNA score entirely in Memory.
  */
-const findBestMatch = async (me, criteria, queue, rawQueue) => {
+const findBestMatch = async (me, criteria, queue) => {
   // 1. Filter candidates by basic criteria (Gender & Age)
-  const validCandidates = queue.map((user, index) => ({ user, index }))
+  const validCandidates = queue.map((user) => ({ user }))
     .filter(({ user }) => {
-      if (!user || user.userId === me._id.toString()) return false;
-
       // Gender Reciprocity
       const genderMatch = (criteria.lookingFor === user.gender) && (user.lookingFor === criteria.gender);
       if (!genderMatch) return false;
@@ -112,7 +149,7 @@ const findBestMatch = async (me, criteria, queue, rawQueue) => {
   const best = scoredCandidates[0];
   
   if (best) {
-    return { match: best.user, matchRawString: rawQueue[best.index] };
+    return { match: best.user };
   }
 
   return { match: null };

@@ -14,7 +14,7 @@ import connectDB from "./config/db.js"; // ✅ استفاده از کانکشن 
 import redisClient from "./config/redis.js";
 import { validateEnv } from "./config/env.js"; // ✅ Critical Fix: Environment validation
 import jwt from "jsonwebtoken"; // ✅ Security Fix: For socket authentication
-import * as cookie from "cookie"; // ✅ Security Fix: For parsing socket cookies
+import cookie from "cookie"; // ✅ Security Fix: For parsing socket cookies
 
 // Routes
 import usersRoutes from "./routes/usersRoutes.js";
@@ -73,33 +73,33 @@ connectDB();
 const setupRedisSubscriber = async () => {
   const subscriber = redisClient.duplicate();
   await subscriber.connect();
-  
+
   await subscriber.subscribe("job-events", (message) => {
     try {
       const event = JSON.parse(message);
       const io = app.get("io");
-      
+
       if (io && event.userId) {
         if (event.type === 'ANALYSIS_COMPLETE') {
           console.log(`🔔 [Socket] Notifying user ${event.userId}: Analysis Complete`);
-          io.to(event.userId).emit("analysis_complete", { 
-            ready: true, 
-            duration: event.duration 
+          io.to(event.userId).emit("analysis_complete", {
+            ready: true,
+            duration: event.duration
           });
         } else if (event.type === 'EXPLORE_COMPLETE') {
           console.log(`🔔 [Socket] Notifying user ${event.userId}: Explore Complete`);
-          io.to(event.userId).emit("explore_complete", { 
-            success: true 
+          io.to(event.userId).emit("explore_complete", {
+            success: true
           });
         } else if (event.type === 'unlock_FEED_COMPLETE') {
           console.log(`🔔 [Socket] Notifying user ${event.userId}: unlock Feed Complete`);
-          io.to(event.userId).emit("unlock_feed_complete", { 
-            success: true 
+          io.to(event.userId).emit("unlock_feed_complete", {
+            success: true
           });
         } else if (event.type === 'ANALYSIS_FAILED') {
           console.log(`🔔 [Socket] Notifying user ${event.userId}: Analysis Failed`);
-          io.to(event.userId).emit("analysis_error", { 
-            message: event.error 
+          io.to(event.userId).emit("analysis_error", {
+            message: event.error
           });
         } else if (event.type === 'NEW_NOTIFICATION') {
           console.log(`🔔 [Socket] Emit Notification to user ${event.userId}`);
@@ -504,8 +504,7 @@ process.on("uncaughtException", (error) => {
 // ==========================================
 const httpServer = server.listen(PORT, () => {
   console.log(
-    `🚀 Server running on port ${PORT} in ${
-      process.env.NODE_ENV || "development"
+    `🚀 Server running on port ${PORT} in ${process.env.NODE_ENV || "development"
     } mode`
   );
 });

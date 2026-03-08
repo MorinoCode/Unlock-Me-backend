@@ -19,34 +19,30 @@ function getActiveCutoff() {
 }
 
 const soulmateProducerProcessor = async () => {
-  try {
-    const staleCutoff = getStaleCutoff();
-    const activeCutoff = getActiveCutoff();
+  const staleCutoff = getStaleCutoff();
+  const activeCutoff = getActiveCutoff();
 
-    const eligibleQuery = {
-      lastActiveAt: { $gte: activeCutoff },
-      "subscription.plan": { $in: ["gold", "platinum", "diamond"] },
-      $or: [
-        { "soulmateMatches.calculatedAt": null },
-        { "soulmateMatches.calculatedAt": { $lt: staleCutoff } },
-      ],
-    };
+  const eligibleQuery = {
+    lastActiveAt: { $gte: activeCutoff },
+    "subscription.plan": { $in: ["gold", "platinum", "diamond"] },
+    $or: [
+      { "soulmateMatches.calculatedAt": null },
+      { "soulmateMatches.calculatedAt": { $lt: staleCutoff } },
+    ],
+  };
 
-    const eligibleUsers = await User.find(eligibleQuery)
-      .select("_id")
-      .limit(1000)
-      .lean();
+  const eligibleUsers = await User.find(eligibleQuery)
+    .select("_id")
+    .limit(1000)
+    .lean();
 
-    for (const user of eligibleUsers) {
-      await soulmateConsumerQueue.add("soulmate-match-job", { userId: user._id.toString() }, {
-        jobId: `soulmate-match-${user._id.toString()}-${Date.now()}`
-      });
-    }
-
-    return { success: true, queued: eligibleUsers.length };
-  } catch (error) {
-    throw error;
+  for (const user of eligibleUsers) {
+    await soulmateConsumerQueue.add("soulmate-match-job", { userId: user._id.toString() }, {
+      jobId: `soulmate-match-${user._id.toString()}-${Date.now()}`
+    });
   }
+
+  return { success: true, queued: eligibleUsers.length };
 };
 
 const soulmateProducer = new Worker("soulmate-producer-queue", soulmateProducerProcessor, {

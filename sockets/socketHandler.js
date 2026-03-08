@@ -59,7 +59,7 @@ export const handleSocketConnection = (io, socket) => {
       } else if (result.error) {
         socket.emit("error", { message: result.error });
       }
-    } catch (err) {
+    } catch (err) { // eslint-disable-line no-unused-vars
       socket.emit("error", { message: "Failed to join queue" });
     }
   });
@@ -108,7 +108,9 @@ export const handleSocketConnection = (io, socket) => {
         io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
         io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
       }
-    } catch (err) { }
+    } catch {
+      // Ignore background errors
+    }
   });
 
   socket.on("typing", ({ receiverId, senderId }) => {
@@ -185,7 +187,9 @@ export const handleSocketConnection = (io, socket) => {
       io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
       io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
 
-    } catch (err) { }
+    } catch {
+      // Ignore background errors
+    }
   });
 
   socket.on("proceed_to_next_stage", async ({ sessionId }) => {
@@ -234,7 +238,9 @@ export const handleSocketConnection = (io, socket) => {
       io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
       io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
 
-    } catch (err) { }
+    } catch {
+      // Ignore background errors
+    }
   });
 
   socket.on("send_blind_message", async ({ sessionId, text }) => {
@@ -258,7 +264,9 @@ export const handleSocketConnection = (io, socket) => {
         "session_update",
         updatedSession
       );
-    } catch (err) { }
+    } catch {
+      // Ignore background errors
+    }
   });
 
   socket.on("submit_reveal_decision", async ({ sessionId, decision }) => {
@@ -327,7 +335,7 @@ export const handleSocketConnection = (io, socket) => {
         "session_update",
         updatedSession
       );
-    } catch (err) {
+    } catch {
       await dbSession.abortTransaction();
     } finally {
       dbSession.endSession();
@@ -357,7 +365,9 @@ export const handleSocketConnection = (io, socket) => {
                   });
               }
           }
-      } catch (err) {}
+      } catch {
+        // Ignore background errors
+      }
 
       const roomName = String(socket.userId);
       socket.leave(roomName);

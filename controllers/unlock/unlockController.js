@@ -107,7 +107,7 @@ export const getunlockCards = async (req, res) => {
     await setMatchesCache(currentUserId, "unlock", enrichedCards, 180);
 
     res.status(200).json(enrichedCards);
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -197,7 +197,8 @@ export const handleunlockAction = async (req, res) => {
       if (len < 20) {
            addTounlockFeedQueue(currentUserId, false).catch(() => {});
       }
-    } catch (e) {
+    } catch (e) { // eslint-disable-line no-unused-vars
+      // Ignored for background sync
     }
 
     res.status(200).json({
@@ -209,7 +210,7 @@ export const handleunlockAction = async (req, res) => {
       }
     });
 
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server Error" });
   }
 };

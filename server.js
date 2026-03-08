@@ -7,7 +7,6 @@ import { Server } from "socket.io";
 import helmet from "helmet";
 import compression from "compression";
 import rateLimit from "express-rate-limit";
-import hpp from "hpp";
 import morgan from "morgan";
 import mongoose from "mongoose";
 import connectDB from "./config/db.js";
@@ -15,8 +14,8 @@ import redisClient from "./config/redis.js";
 import { validateEnv } from "./config/env.js";
 import jwt from "jsonwebtoken";
 import cookie from "cookie";
-import mongoSanitize from "express-mongo-sanitize";
 import pino from "pino";
+import { unifiedSanitizer } from "./middleware/security.js";
 
 import usersRoutes from "./routes/usersRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
@@ -230,8 +229,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 app.use(cookieParser());
 
-app.use(mongoSanitize());
-app.use(hpp());
+app.use(unifiedSanitizer);
 
 const io = new Server(server, {
   cors: {
@@ -328,7 +326,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/seo", seoRoutes);
 
 app.get("/ping", (req, res) => {
-  res.status(200).send("pong 🏓");
+  res.status(200).send("pong \uD83C\uDFD3");
 });
 
 app.get("/health", async (req, res) => {

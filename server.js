@@ -14,8 +14,8 @@ import redisClient from "./config/redis.js";
 import { validateEnv } from "./config/env.js";
 import jwt from "jsonwebtoken";
 import cookie from "cookie";
-import mongoSanitize from "express-mongo-sanitize";
 import pino from "pino";
+import { unifiedSanitizer } from "./middleware/security.js";
 
 import usersRoutes from "./routes/usersRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
@@ -229,18 +229,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 app.use(cookieParser());
 
-app.use(mongoSanitize());
-
-app.use((req, res, next) => {
-  if (req.query) {
-    for (const key in req.query) {
-      if (Array.isArray(req.query[key])) {
-        req.query[key] = req.query[key][0];
-      }
-    }
-  }
-  next();
-});
+app.use(unifiedSanitizer);
 
 const io = new Server(server, {
   cors: {

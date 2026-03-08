@@ -9,6 +9,7 @@ import { addToQueue, leaveQueue } from "../utils/blindDateService.js";
 export const handleSocketConnection = (io, socket) => {
   const userId = socket.handshake.query.userId;
 
+  // ✅ FIX #5: Support multi-device — store a Set of socketIds per userId
   if (userId && userId !== "undefined") {
     socket.userId = userId;
     socket.join(userId);

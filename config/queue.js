@@ -31,26 +31,39 @@ const initRepeatableJobs = async () => {
       jobId: "soulmate-producer-repeatable"
     });
 
-    await arrayCleanupQueue.add("array-cleanup-job", {}, {
-      repeat: { pattern: "*/5 * * * *", tz: "UTC" },
-      jobId: "array-cleanup-repeatable"
-    });
+const godateQueue = new Queue("godate-queue", {
+    connection: bullMQConnection,
+    defaultJobOptions,
+});
 
-    await trialExpirationQueue.add("trial-expiration-job", {}, {
-      repeat: { pattern: "*/5 * * * *", tz: "UTC" },
-      jobId: "trial-expiration-repeatable"
-    });
+const unlockActionQueue = new Queue("unlock-action-queue", {
+    connection: bullMQConnection,
+    defaultJobOptions,
+});
 
-    await godateQueue.add("godate-cleanup-job", { type: "CLEANUP_EXPIRED" }, {
-      repeat: { pattern: "*/30 * * * *", tz: "UTC" },
-      jobId: "godate-cleanup-repeatable"
-    });
-  } catch (error) {
-    console.error(error);
-  }
-};
+const notificationQueue = new Queue("notification-queue", {
+    connection: bullMQConnection,
+    defaultJobOptions,
+});
 
-initRepeatableJobs();
+const mediaQueue = new Queue("media-queue", {
+    connection: bullMQConnection,
+    defaultJobOptions,
+});
+
+const onboardingQueue = new Queue("onboarding-queue", {
+  connection: bullMQConnection,
+  defaultJobOptions,
+});
+
+const messageQueue = new Queue("message-queue", {
+  connection: bullMQConnection,
+  defaultJobOptions,
+});
+
+console.log("✅ [Queue] Analysis, Explore, GoDate, unlock, Notification, Media, Onboarding & Message Queues Initialized");
+
+export { analysisQueue, exploreQueue, godateQueue, unlockActionQueue, notificationQueue, mediaQueue, onboardingQueue, messageQueue };
 
 export { 
   analysisQueue, exploreQueue, godateQueue, unlockActionQueue, 

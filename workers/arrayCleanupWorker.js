@@ -1,27 +1,12 @@
-/**
- * ✅ Bug Fix: Array Cleanup Worker
- * Runs daily to clean up large arrays and prevent memory leaks
- */
-
-import cron from "node-cron";
+import { Worker } from "bullmq";
 import User from "../models/User.js";
+import { bullMQConnection } from "../config/redis.js";
 import { cleanupUserArrays } from "../utils/arrayLimiter.js";
 
-let isRunning = false;
-
-cron.schedule("0 2 * * *", async () => {
-  if (isRunning) {
-    console.log("⏰ Array Cleanup: Already running, skipping...");
-    return;
-  }
-  
-  isRunning = true;
+const arrayCleanupProcessor = async (job) => {
   const startTime = Date.now();
-  
+
   try {
-    console.log("🧹 Array Cleanup Job Started...");
-    
-    // Get all users with large arrays
     const users = await User.find({
       $or: [
         { $expr: { $gt: [{ $size: "$likedUsers" }, 5000] } },
@@ -31,27 +16,30 @@ cron.schedule("0 2 * * *", async () => {
       ]
     }).select("_id").lean();
     
-    console.log(`📊 Found ${users.length} users with large arrays`);
-    
     let cleaned = 0;
-    for (const user of users) {
+    for (let i = 0; i < users.length; i++) {
+      const user = users[i];
       try {
         await cleanupUserArrays(user._id);
         cleaned++;
-        if (cleaned % 10 === 0) {
-          console.log(`📊 Progress: ${cleaned}/${users.length} users cleaned...`);
-        }
+        await job.updateProgress(Math.floor(((i + 1) / users.length) * 100));
       } catch (error) {
-        console.error(`❌ Error cleaning user ${user._id}:`, error.message);
+        console.error(error);
       }
     }
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`✅ Array Cleanup Completed: Cleaned ${cleaned} users in ${duration}s`);
-    
+
+    return { success: true, usersCleaned: cleaned, duration };
   } catch (error) {
-    console.error("❌ Array Cleanup Error:", error);
-  } finally {
-    isRunning = false;
+    throw error;
   }
+};
+
+const arrayCleanupWorker = new Worker("array-cleanup-queue", arrayCleanupProcessor, {
+    connection: bullMQConnection,
+    concurrency: 1,
+    lockDuration: 300000, 
 });
+
+export default arrayCleanupWorker;

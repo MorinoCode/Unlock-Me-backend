@@ -24,12 +24,12 @@ const userSchema = new mongoose.Schema(
       maxlength: 15,
     },
     password: { type: String, required: true, select: false },
-    refreshToken: { type: String, select: false }, // ✅ Security Fix: Store refresh token
+    refreshToken: { type: String, select: false },
 
     gender: {
       type: String,
       enum: ["Male", "Female", "Other"],
-      default: "Other", // ✅ Bug Fix: Default must match enum value
+      default: "Other",
       trim: true,
     },
 
@@ -48,7 +48,7 @@ const userSchema = new mongoose.Schema(
         default: 'unverified' 
       },
       mediaUrl: { type: String, default: null }, 
-      publicId: { type: String, default: null }, // Useful for deleting from Cloudinary later
+      publicId: { type: String, default: null },
       requestedAt: { type: Date, default: null }
     },
 
@@ -77,24 +77,22 @@ const userSchema = new mongoose.Schema(
         enum: ["active", "expired", "canceled"],
         default: "active",
       },
-      // ✅ RevenueCat Specific Fields
-      revenueCatId: { type: String, default: null }, // Original App User ID in RevenueCat
+      revenueCatId: { type: String, default: null },
       platform: { type: String, enum: ["ios", "android", "stripe", null], default: null },
-      activeEntitlements: { type: [String], default: [] }, // Array of active entitlements (e.g. ['premium'])
-
-      isTrial: { type: Boolean, default: false },          // ✅ Free trial flag
-      trialExpiresAt: { type: Date, default: null },       // ✅ When the 7-day trial ends
-      startedAt: { type: Date, default: Date.now },        // ✅ When the current plan/trial started
+      activeEntitlements: { type: [String], default: [] },
+      isTrial: { type: Boolean, default: false },
+      trialExpiresAt: { type: Date, default: null },
+      startedAt: { type: Date, default: Date.now },
     },
 
     usage: {
       unlocksCount: { type: Number, default: 0 },
-      keysUsedToday: { type: Number, default: 0 }, // ✅ New: Track daily key usage
+      keysUsedToday: { type: Number, default: 0 },
       superLikesCount: { type: Number, default: 0 },
       directMessagesCount: { type: Number, default: 0 },
       blindDatesCount: { type: Number, default: 0 },
       lastBlindDateAt: { type: Date, default: null },
-      lastunlockDate: { type: Date, default: null }, // ✅ Critical Fix: Add missing field
+      lastunlockDate: { type: Date, default: null },
       lastResetDate: { type: Date, default: Date.now },
     },
 
@@ -103,27 +101,21 @@ const userSchema = new mongoose.Schema(
     dislikedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     superLikedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     superLikedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    // ✅ Bug Fix: Explicit matches array for mutual matches
     matches: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    // ✅ Block User Feature
     blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     blockedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    
-    // ✅ Unlock Feature Persistence
     unlockedProfiles: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
-    // ✅ Pre-computed Soulmate Matches (Updated weekly by soulmateWorker)
     soulmateMatches: {
       list: [
         {
           user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-          score: { type: Number }, // e.g. 94
+          score: { type: Number },
         }
       ],
-      calculatedAt: { type: Date, default: null }, // null = never computed
+      calculatedAt: { type: Date, default: null },
     },
 
-    // ✅ Tracks last API activity for smart worker scheduling
     lastActiveAt: { type: Date, default: Date.now },
 
     interests: [String],
@@ -189,30 +181,26 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ✅ Performance Fix: Database Indexes
 userSchema.index({ "location.country": 1, "location.city": 1 });
 userSchema.index({ "location.country": 1, createdAt: -1 });
 userSchema.index({ "location.country": 1, gender: 1 });
 userSchema.index({ location: "2dsphere" });
-// email and username: index created by unique: true in schema — do not add duplicate
-userSchema.index({ "dna.Logic": 1, "dna.Emotion": 1, "dna.Energy": 1 }); // For DNA queries
-userSchema.index({ lastMatchCalculation: 1 }); // For match worker
-userSchema.index({ "subscription.plan": 1, "subscription.status": 1 }); // For subscription queries
-userSchema.index({ likedUsers: 1 }); // For match queries
-userSchema.index({ likedBy: 1 }); // For match queries
-userSchema.index({ dislikedUsers: 1 }); // For unlock: "users who disliked me" exclusion
-userSchema.index({ blockedUsers: 1 }); // For block feature
-userSchema.index({ blockedBy: 1 }); // For block feature
-userSchema.index({ createdAt: -1 }); // For sorting by newest
+userSchema.index({ "dna.Logic": 1, "dna.Emotion": 1, "dna.Energy": 1 });
+userSchema.index({ lastMatchCalculation: 1 });
+userSchema.index({ "subscription.plan": 1, "subscription.status": 1 });
+userSchema.index({ likedUsers: 1 });
+userSchema.index({ likedBy: 1 });
+userSchema.index({ dislikedUsers: 1 });
+userSchema.index({ blockedUsers: 1 });
+userSchema.index({ blockedBy: 1 });
+userSchema.index({ createdAt: -1 });
 
-// ✅ unlock fallback query: country + gender + dna (compound for getCandidatesFromDB / getunlockCards)
 userSchema.index({ "location.country": 1, gender: 1, dna: 1 });
-// ✅ Explore "nearby" + sort by new: country + city + createdAt
 userSchema.index({ "location.country": 1, "location.city": 1, createdAt: -1 });
-// ✅ soulmateWorker: filter active paid users (subscription.plan + lastActiveAt)
 userSchema.index({ "subscription.plan": 1, lastActiveAt: -1 });
-// ✅ soulmateWorker: stale check — who needs recomputing
 userSchema.index({ "soulmateMatches.calculatedAt": 1 });
+
+userSchema.index({ _id: 1, "usage.directMessagesCount": 1 });
 
 const User = mongoose.model("User", userSchema);
 export default User;

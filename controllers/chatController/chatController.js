@@ -7,10 +7,10 @@ import { emitNotification } from "../../utils/notificationHelper.js";
 import User from "../../models/User.js";
 import { getDailyDmLimit } from "../../utils/subscriptionRules.js";
 import { getMatchesCache, setMatchesCache, invalidateMatchesCache } from "../../utils/cacheHelper.js";
-import { messageQueue } from "../../config/queue.js"; // ✅ NEW: BullMQ
+import { messageQueue } from "../../config/queue.js"; 
 import mongoose from "mongoose";
 
-const INBOX_CACHE_TTL = 180; // 3 min
+const INBOX_CACHE_TTL = 180; 
 const invalidateInboxForUser = (userId) =>
   Promise.all([
     invalidateMatchesCache(userId, "conversations_active"),
@@ -23,55 +23,45 @@ export const sendMessage = async (req, res) => {
     const { receiverId, text, parentMessage, fileUrl, fileType } = req.body;
     const senderId = req.user.userId || req.user.id;
 
-    if (!receiverId) {
-      return res.status(400).json({ error: "receiverId is required" });
-    }
-    if (!text && !fileUrl) {
-      return res.status(400).json({ error: "Empty message" });
+    if (!receiverId) return res.status(400).json({ error: "receiverId is required" });
+    if (!text && !fileUrl) return res.status(400).json({ error: "Empty message" });
+
+    if (fileUrl && !/^https:\/\/res\.cloudinary\.com\/.*/.test(fileUrl)) {
+      return res.status(400).json({ error: "Invalid file URL. Only Cloudinary URLs are allowed." });
     }
 
     const cleanText = text
       ? sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} })
       : "";
+      
     const sender = await User.findById(senderId).select(
       "usage subscription likedUsers likedBy blockedUsers blockedBy"
-    );
+    ).lean();
 
-    // ✅ Block check: prevent messaging blocked users
     if (sender.blockedUsers?.some(id => id.toString() === receiverId) ||
         sender.blockedBy?.some(id => id.toString() === receiverId)) {
       return res.status(403).json({ error: "Cannot send message to this user" });
     }
 
-    // --- Daily Reset Logic ---
     const now = new Date();
-    const lastReset = sender.usage?.lastResetDate
-      ? new Date(sender.usage.lastResetDate)
-      : new Date(0);
-    // ✅ Bug Fix #16: Added year check for daily reset
+    const lastReset = sender.usage?.lastResetDate ? new Date(sender.usage.lastResetDate) : new Date(0);
     const isNextDay =
       now.getFullYear() !== lastReset.getFullYear() ||
       now.getMonth() !== lastReset.getMonth() ||
       now.getDate() !== lastReset.getDate();
 
     if (isNextDay) {
-      if (!sender.usage) sender.usage = {};
-      sender.usage.directMessagesCount = 0;
-      sender.usage.lastResetDate = now;
-      await sender.save();
+      await User.findByIdAndUpdate(senderId, {
+         $set: { "usage.directMessagesCount": 0, "usage.lastResetDate": now }
+      });
     }
 
-    // --- 1. Find or Create Conversation Context First ---
-    // We need to know if the conversation is unlocked BEFORE checking limits
     let conversation = await Conversation.findOne({
       participants: { $all: [senderId, receiverId] },
     });
 
-    // --- 2. Check Permissions (The Gatekeeper) ---
-    // A chat is "Bypassed" (Free to chat) if it is explicitly unlocked (Go Date / Blind Date)
     let isUnlocked = conversation?.isUnlocked === true;
 
-    // اگر آنلاک نبود، چک کن آیا با Blind Date یا Go Date مچ شدن → اجازه چت بده (رایگان)
     if (!isUnlocked) {
       const blindDateSession = await BlindSession.findOne({
         participants: { $all: [senderId, receiverId] },
@@ -95,7 +85,7 @@ export const sendMessage = async (req, res) => {
           await conversation.save();
         }
       }
-      // Go Date: اگر یکی سازنده و دیگری acceptedUser باشد → چت آنلاک
+      
       if (!isUnlocked) {
         const goDateAccepted = await GoDate.findOne({
           status: "closed",
@@ -125,21 +115,11 @@ export const sendMessage = async (req, res) => {
       }
     }
 
-    // Check match status for standard flow
-    // ✅ Critical Fix: Null check to prevent crash
     const isMatch =
-      (sender.likedUsers || []).some(
-        (id) => id.toString() === receiverId.toString()
-      ) &&
-      (sender.likedBy || []).some(
-        (id) => id.toString() === receiverId.toString()
-      );
+      (sender.likedUsers || []).some((id) => id.toString() === receiverId.toString()) &&
+      (sender.likedBy || []).some((id) => id.toString() === receiverId.toString());
 
-    // If it's NOT unlocked, we must apply strict subscription rules
-    if (!isUnlocked) {
-      // If they are not a match, and not unlocked, check DM limits
-      if (!isMatch) {
-        // If conversation exists but is pending and sender started it -> Wait
+    if (!isUnlocked && !isMatch) {
         if (
           conversation &&
           conversation.status === "pending" &&
@@ -151,14 +131,10 @@ export const sendMessage = async (req, res) => {
           });
         }
 
-        // If no active conversation, check Plan Limits
         if (!conversation || conversation.status !== "active") {
           const userPlan = sender.subscription?.plan || "free";
-
-          // Use the utility function for consistency
           const limit = getDailyDmLimit(userPlan);
 
-          // Strict check for Free users on Direct Messages
           if (limit === 0) {
             return res.status(403).json({
               error: "Upgrade Required",
@@ -166,22 +142,24 @@ export const sendMessage = async (req, res) => {
             });
           }
 
-          // Check numeric limit for Gold/Platinum
-          if (limit !== Infinity && sender.usage.directMessagesCount >= limit) {
-            return res.status(403).json({
-              error: "Limit Reached",
-              message: `Daily limit of ${limit} DMs reached.`,
-            });
+          if (limit !== Infinity) {
+             const updatedSender = await User.findOneAndUpdate(
+               { _id: senderId, "usage.directMessagesCount": { $lt: limit } },
+               { $inc: { "usage.directMessagesCount": 1 } },
+               { new: true }
+             );
+             if (!updatedSender) {
+               return res.status(403).json({
+                 error: "Limit Reached",
+                 message: `Daily limit of ${limit} DMs reached.`,
+               });
+             }
+          } else {
+             await User.findByIdAndUpdate(senderId, { $inc: { "usage.directMessagesCount": 1 } });
           }
-
-          // Increment usage if allowed
-          sender.usage.directMessagesCount += 1;
-          await sender.save();
         }
-      }
     }
 
-    // --- 3. Create or Update Conversation ---
     const initialStatus = isMatch ? "active" : "pending";
     const initialMatchType = isMatch ? "unlock" : "direct";
     const finalUnlocked = isUnlocked; 
@@ -196,7 +174,7 @@ export const sendMessage = async (req, res) => {
         status: initialStatus,
         hiddenBy: []
       });
-      await conversation.save(); // Initial save
+      await conversation.save(); 
     } else {
       let needsSave = false;
       if (isMatch && conversation.status !== "active") {
@@ -214,7 +192,6 @@ export const sendMessage = async (req, res) => {
       if (needsSave) await conversation.save(); 
     }
 
-    // ✅ Performance Fix: Optimistic ID Generation & BullMQ Queueing
     const messageId = new mongoose.Types.ObjectId();
     const newMessage = {
       _id: messageId,
@@ -229,7 +206,6 @@ export const sendMessage = async (req, res) => {
       createdAt: new Date(),
     };
 
-    // Dispatch to BullMQ for DB writing and sockets without crashing Node.js Event Loop
     await messageQueue.add("process-message", {
       newMessage,
       senderId,
@@ -239,118 +215,115 @@ export const sendMessage = async (req, res) => {
 
     res.status(201).json(newMessage);
   } catch (error) {
-    console.error("SendMessage Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error. Please try again later." });
   }
 };
 
 export const getConversations = async (req, res) => {
   try {
     const myId = String(req.user.userId || req.user.id);
-    const { type = "active" } = req.query;
+    const { type = "active", cursor } = req.query;
     const cacheType = type === "requests" ? "conversations_requests" : "conversations_active";
 
-    const cached = await getMatchesCache(myId, cacheType);
-    if (cached) return res.status(200).json(cached);
+    if (!cursor) {
+        const cached = await getMatchesCache(myId, cacheType);
+        if (cached) return res.status(200).json(cached);
+    }
 
-    // مطابقت قطعی با participants (هم string هم ObjectId در دیتابیس)
-    const myIdForQuery = mongoose.Types.ObjectId.isValid(myId)
+    const myIdObj = mongoose.Types.ObjectId.isValid(myId)
       ? new mongoose.Types.ObjectId(myId)
       : myId;
 
-    let query = {
-      participants: myIdForQuery,
-      hiddenBy: { $ne: myIdForQuery },
+    let matchQuery = {
+      participants: myIdObj,
+      hiddenBy: { $ne: myIdObj },
     };
 
     if (type === "requests") {
-      // تب «Requests»: فقط پیام‌های pending که کاربر initiator نیست (یعنی برایش request آمده)
-      query.status = "pending";
-      query.initiator = { $ne: myIdForQuery };
+      matchQuery.status = "pending";
+      matchQuery.initiator = { $ne: myIdObj };
     } else {
-      // تب «Active Chats»: مکالمات active + پیام‌های ارسالی خودمان که منتظر تایید هستند
-      query.$or = [
+      matchQuery.$or = [
         { status: "active" },
-        { status: "pending", initiator: myIdForQuery },
+        { status: "pending", initiator: myIdObj },
       ];
     }
+    
+    if (cursor) {
+         matchQuery.updatedAt = { $lt: new Date(cursor) };
+    }
 
-    const conversations = await Conversation.find(query)
-      .populate("participants", "name avatar isOnline")
-      .sort({ updatedAt: -1 })
-      .lean();
+    const pipeline = [
+      { $match: matchQuery },
+      {
+        $lookup: {
+          from: "users",
+          let: { participantArray: "$participants" },
+          pipeline: [
+            { $match: { _id: myIdObj } },
+            { $project: { blockedUsers: 1, blockedBy: 1 } }
+          ],
+          as: "meData"
+        }
+      },
+      {
+        $addFields: {
+          blockedCombined: {
+             $concatArrays: [
+                { $ifNull: [{ $arrayElemAt: ["$meData.blockedUsers", 0] }, []] },
+                { $ifNull: [{ $arrayElemAt: ["$meData.blockedBy", 0] }, []] }
+             ]
+          }
+        }
+      },
+      {
+        $match: {
+          $expr: {
+             $eq: [
+               { $size: { $setIntersection: ["$participants", "$blockedCombined"] } },
+               0
+             ]
+          }
+        }
+      },
+      { $sort: { updatedAt: -1 } },
+      { $limit: 10 }
+    ];
 
-    // ✅ Bug Fix #18: Filter out conversations with blocked users
-    const me = await User.findById(myId).select("blockedUsers blockedBy").lean();
-    const blockedSet = new Set([
-      ...(me?.blockedUsers || []).map(id => id.toString()),
-      ...(me?.blockedBy || []).map(id => id.toString()),
-    ]);
-    const filteredConversations = blockedSet.size > 0
-      ? conversations.filter(conv => {
-          const otherParticipant = conv.participants?.find(
-            (p) => (p._id || p).toString() !== myId
-          );
-          return otherParticipant && !blockedSet.has((otherParticipant._id || otherParticipant).toString());
-        })
-      : conversations;
+    const conversations = await Conversation.aggregate(pipeline);
+    await Conversation.populate(conversations, { path: "participants", select: "name avatar isOnline" });
 
-    // ✅ Performance Fix: Batch count unread messages instead of N+1 queries
-    const conversationIds = filteredConversations.map((c) => c._id);
+    const conversationIds = conversations.map((c) => c._id);
+    const unreadCounts = conversationIds.length > 0
+         ? await Message.aggregate([
+             { $match: { conversationId: { $in: conversationIds }, receiver: myIdObj, isRead: false, isDeleted: false } },
+             { $group: { _id: "$conversationId", count: { $sum: 1 } } },
+           ])
+         : [];
 
-    // Single aggregation query to get all unread counts
-    const unreadCounts =
-      conversationIds.length > 0
-        ? await Message.aggregate([
-            {
-              $match: {
-                conversationId: { $in: conversationIds },
-                receiver: new mongoose.Types.ObjectId(myId),
-                isRead: false,
-                isDeleted: false,
-              },
-            },
-            {
-              $group: {
-                _id: "$conversationId",
-                count: { $sum: 1 },
-              },
-            },
-          ])
-        : [];
-
-    // Create a map for O(1) lookup
     const unreadMap = {};
     unreadCounts.forEach((item) => {
       unreadMap[item._id.toString()] = item.count;
     });
 
-    // Map conversations with unread counts
-    const conversationsWithUnread = filteredConversations.map((conv) => ({
-      ...conv,
-      unreadCount: unreadMap[conv._id.toString()] || 0,
+    const conversationsWithUnread = conversations.map((conv) => ({
+       ...conv,
+       unreadCount: unreadMap[conv._id.toString()] || 0,
     }));
 
-    await setMatchesCache(myId, cacheType, conversationsWithUnread, INBOX_CACHE_TTL);
+    if (!cursor) {
+        await setMatchesCache(myId, cacheType, conversationsWithUnread, INBOX_CACHE_TTL);
+    }
+
     res.status(200).json(conversationsWithUnread);
   } catch (error) {
-    console.error("Get Conversations Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error. Please try again later." });
   }
 };
 
 export const getMessages = async (req, res) => {
   try {
     res.set({ "Cache-Control": "no-store" });
-
     const { otherUserId } = req.params;
     const myId = req.user.userId || req.user.id;
 
@@ -360,20 +333,18 @@ export const getMessages = async (req, res) => {
 
     const { page = 1, limit = 50 } = req.query;
     const pageNum = Math.max(1, parseInt(page));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit))); // Max 100 per page
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit))); 
     const skip = (pageNum - 1) * limitNum;
 
     const myObjId = mongoose.Types.ObjectId.isValid(myId) ? new mongoose.Types.ObjectId(myId) : myId;
     const otherObjId = mongoose.Types.ObjectId.isValid(otherUserId) ? new mongoose.Types.ObjectId(otherUserId) : otherUserId;
 
-    // ✅ Performance Fix: Find conversation first (Indexed)
     const conversation = await Conversation.findOne({
       participants: { $all: [myObjId, otherObjId] }
     }).select("_id").lean();
 
     let messages = [];
     if (conversation) {
-      // ✅ Performance Fix: Query messages strictly by conversationId index
       messages = await Message.find({
         conversationId: conversation._id,
         isDeleted: false,
@@ -386,16 +357,11 @@ export const getMessages = async (req, res) => {
 
     res.status(200).json(messages);
   } catch (error) {
-    console.error("Chat Controller Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-const UNREAD_COUNT_CACHE_TTL = 30; // 30 sec
+const UNREAD_COUNT_CACHE_TTL = 30;
 
 export const getUnreadMessagesCount = async (req, res) => {
   try {
@@ -430,10 +396,7 @@ export const getUnreadMessagesCount = async (req, res) => {
     await setMatchesCache(myId, "unread_count", payload, UNREAD_COUNT_CACHE_TTL);
     res.status(200).json(payload);
   } catch (error) {
-    console.error("Get Unread Count Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production" ? "Server error." : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -462,12 +425,7 @@ export const markAsRead = async (req, res) => {
 
     res.status(200).json({ message: "Marked read" });
   } catch (error) {
-    console.error("Chat Controller Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -478,7 +436,6 @@ export const editMessage = async (req, res) => {
     const userId = req.user.userId || req.user.id;
     const io = req.app.get("io");
 
-    // ✅ Security Fix: Check message ownership before editing
     const message = await Message.findById(id);
     if (!message) return res.status(404).json({ error: "Message not found" });
     if (message.sender.toString() !== userId.toString()) {
@@ -488,23 +445,17 @@ export const editMessage = async (req, res) => {
     message.text = text;
     message.isEdited = true;
     await message.save();
-    const updatedMessage = message;
 
-    io.to(updatedMessage.receiver.toString())
-      .to(updatedMessage.sender.toString())
+    io.to(message.receiver.toString())
+      .to(message.sender.toString())
       .emit("message_edited", {
-        id: updatedMessage._id,
-        text: updatedMessage.text,
+        id: message._id,
+        text: message.text,
       });
 
-    res.status(200).json(updatedMessage);
+    res.status(200).json(message);
   } catch (error) {
-    console.error("Chat Controller Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -519,7 +470,6 @@ export const deleteMessage = async (req, res) => {
       return res.status(404).json({ error: "Message not found" });
     }
 
-    // ✅ Security Fix: Check message ownership before deleting
     if (message.sender.toString() !== userId.toString()) {
       return res.status(403).json({ error: "You can only delete your own messages" });
     }
@@ -534,12 +484,7 @@ export const deleteMessage = async (req, res) => {
 
     res.status(200).json({ message: "Deleted successfully" });
   } catch (error) {
-    console.error("Chat Controller Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -553,7 +498,6 @@ export const reactToMessage = async (req, res) => {
     const message = await Message.findById(id);
     if (!message) return res.status(404).json({ message: "Message not found" });
 
-    // ✅ Bug Fix: Use .toString() for ObjectId comparison
     const existingReaction = message.reactions.find((r) => r.userId?.toString() === userId.toString());
 
     if (existingReaction) {
@@ -573,12 +517,7 @@ export const reactToMessage = async (req, res) => {
 
     res.status(200).json(message);
   } catch (error) {
-    console.error("Chat Controller Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -589,14 +528,10 @@ export const acceptRequest = async (req, res) => {
     const io = req.app.get("io");
 
     const conversation = await Conversation.findById(conversationId);
-    if (!conversation)
-      return res.status(404).json({ error: "Conversation not found" });
+    if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
-    // Security: Only the receiver can accept
     if (conversation.initiator.toString() === userId.toString()) {
-      return res
-        .status(403)
-        .json({ error: "You cannot accept your own request" });
+      return res.status(403).json({ error: "You cannot accept your own request" });
     }
 
     conversation.status = "active";
@@ -608,7 +543,6 @@ export const acceptRequest = async (req, res) => {
 
     io.to(senderId.toString()).emit("request_accepted", { conversationId });
 
-    // Notification
     await emitNotification(io, senderId, {
       type: "REQUEST_ACCEPTED",
       senderId: userId,
@@ -620,12 +554,7 @@ export const acceptRequest = async (req, res) => {
 
     res.status(200).json({ message: "Request accepted", conversation });
   } catch (error) {
-    console.error("Chat Controller Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -635,17 +564,10 @@ export const rejectRequest = async (req, res) => {
     const userId = req.user.userId || req.user.id;
 
     const conversation = await Conversation.findById(conversationId).lean();
-    if (!conversation) {
-      return res.status(404).json({ error: "Conversation not found" });
-    }
+    if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
-    // ✅ Security Fix: Only a participant (non-initiator) can reject
-    const isParticipant = conversation.participants.some(
-      (p) => p.toString() === userId.toString()
-    );
-    if (!isParticipant) {
-      return res.status(403).json({ error: "Not a participant" });
-    }
+    const isParticipant = conversation.participants.some(p => p.toString() === userId.toString());
+    if (!isParticipant) return res.status(403).json({ error: "Not a participant" });
     if (conversation.initiator?.toString() === userId.toString()) {
       return res.status(403).json({ error: "You cannot reject your own request" });
     }
@@ -660,19 +582,10 @@ export const rejectRequest = async (req, res) => {
 
     res.status(200).json({ message: "Request rejected and deleted" });
   } catch (error) {
-    console.error("Chat Controller Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production"
-        ? "Server error. Please try again later."
-        : error.message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-/**
- * حذف چت از لیست برای کاربر جاری (استاندارد اپ‌های چت)
- * تاریخچه و مکالمه حذف نمی‌شود؛ فقط از لیست این کاربر پنهان می‌شود. طرف مقابل چت را می‌بیند.
- */
 export const hideConversation = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
@@ -683,18 +596,12 @@ export const hideConversation = async (req, res) => {
     }
 
     const conversation = await Conversation.findById(conversationId);
-    if (!conversation)
-      return res.status(404).json({ error: "Conversation not found" });
+    if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
-    const isParticipant = conversation.participants.some(
-      (p) => p.toString() === userId.toString()
-    );
-    if (!isParticipant)
-      return res.status(403).json({ error: "Not a participant" });
+    const isParticipant = conversation.participants.some(p => p.toString() === userId.toString());
+    if (!isParticipant) return res.status(403).json({ error: "Not a participant" });
 
-    const userIdObj = mongoose.Types.ObjectId.isValid(userId)
-      ? new mongoose.Types.ObjectId(userId)
-      : userId;
+    const userIdObj = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
     if (!conversation.hiddenBy) conversation.hiddenBy = [];
     if (conversation.hiddenBy.some((id) => id.toString() === userId.toString()))
       return res.status(200).json({ message: "Already hidden", conversation });
@@ -706,9 +613,6 @@ export const hideConversation = async (req, res) => {
 
     res.status(200).json({ message: "Conversation hidden from your list" });
   } catch (error) {
-    console.error("Hide Conversation Error:", error);
-    const errorMessage =
-      process.env.NODE_ENV === "production" ? "Server error." : error.message;
-    res.status(500).json({ error: errorMessage });
+    res.status(500).json({ error: "Server error" });
   }
 };

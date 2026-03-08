@@ -1,29 +1,13 @@
-/**
- * ✅ 7-Day Platinum Trial Expiration Worker
- * Runs daily to check for expired trials and downgrade users to free plan.
- */
-
-import cron from "node-cron";
+import { Worker } from "bullmq";
 import User from "../models/User.js";
+import { bullMQConnection } from "../config/redis.js";
 
-let isRunning = false;
-
-// Run every hour to ensure timely downgrades
-cron.schedule("0 * * * *", async () => {
-  if (isRunning) {
-    console.log("⏰ Trial Expiration: Already running, skipping...");
-    return;
-  }
-  
-  isRunning = true;
+const trialExpirationProcessor = async (job) => {
   const startTime = Date.now();
-  
+
   try {
-    console.log("⏳ Trial Expiration Job Started...");
-    
     const now = new Date();
     
-    // Find users whose trial has expired
     const result = await User.updateMany(
       {
         "subscription.isTrial": true,
@@ -41,15 +25,16 @@ cron.schedule("0 * * * *", async () => {
     );
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    if (result.modifiedCount > 0) {
-      console.log(`✅ Trial Expiration Completed: Downgraded ${result.modifiedCount} users in ${duration}s`);
-    } else {
-      console.log(`⌛ Trial Expiration Completed: No expired trials found. (${duration}s)`);
-    }
-    
+
+    return { success: true, modifiedCount: result.modifiedCount, duration };
   } catch (error) {
-    console.error("❌ Trial Expiration Error:", error);
-  } finally {
-    isRunning = false;
+    throw error;
   }
+};
+
+const trialExpirationWorker = new Worker("trial-expiration-queue", trialExpirationProcessor, {
+    connection: bullMQConnection,
+    concurrency: 1,
 });
+
+export default trialExpirationWorker;

@@ -2,12 +2,10 @@ import User from "../../models/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-
 export const signinUser = async (req, res) => {
   let { email, password } = req.body;
 
   try {
-    // 1. نرمال‌سازی ایمیل (کوچک کردن + حذف فاصله‌های اضافی احتمالی)
     email = email.toLowerCase().trim();
 
     const user = await User.findOne({ email }).select("+password");
@@ -17,14 +15,12 @@ export const signinUser = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-    // ✅ Security Fix: Shorter access token + refresh token
     const accessToken = jwt.sign(
       { userId: user._id, role: user.role, location: user.location, username: user.username, type: 'access' },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" } // ✅ Security Fix: Short-lived access token
+      { expiresIn: "15m" } 
     );
     
-    // ✅ Security Fix: Separated secrets for refresh tokens
     const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
     const refreshToken = jwt.sign(
       { userId: user._id, type: 'refresh' },
@@ -32,27 +28,20 @@ export const signinUser = async (req, res) => {
       { expiresIn: "7d" }
     );
     
-    // Store refresh token
     await User.findByIdAndUpdate(user._id, { refreshToken });
 
-    // 2. تشخیص محیط (لوکال یا پروداکشن)
-    const isProduction = process.env.NODE_ENV === "production";
-
-    // 3. تنظیم کوکی (اصلاح شده برای آیفون و ساب‌دامین)
     res.cookie("unlock-me-token", accessToken, {
       httpOnly: true,
-      secure: isProduction, 
-      sameSite: "lax", 
-      domain: isProduction ? ".unlock-me.app" : undefined, 
-      maxAge: 15 * 60 * 1000, // 15 minutes
+      secure: true,
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000, 
     });
     
     res.cookie("unlock-me-refresh-token", refreshToken, {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: "lax",
-      domain: isProduction ? ".unlock-me.app" : undefined,
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      secure: true,
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000, 
     });
 
     res.status(200).json({
@@ -65,8 +54,6 @@ export const signinUser = async (req, res) => {
       refreshToken,
     });
   } catch (err) {
-    console.error("Signin Error:", err);
-    // ✅ Security Fix: Don't expose error details
     const errorMessage = process.env.NODE_ENV === 'production' 
       ? "Server error. Please try again later." 
       : err.message;

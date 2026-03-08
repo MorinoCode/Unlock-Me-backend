@@ -11,7 +11,7 @@ const BlindSessionSchema = new mongoose.Schema({
     type: String,
     enum: [
       "matching",
-      "instructions", // ✅ وضعیت راهنما
+      "instructions",
       "active",
       "waiting_for_stage_2",
       "waiting_for_stage_3",
@@ -19,7 +19,7 @@ const BlindSessionSchema = new mongoose.Schema({
       "completed",
       "cancelled",
     ],
-    default: "instructions", // ✅ شروع با راهنما
+    default: "instructions",
   },
   currentStage: {
     type: Number,
@@ -46,15 +46,12 @@ const BlindSessionSchema = new mongoose.Schema({
       timestamp: { type: Date, default: Date.now },
     },
   ],
-  // ✅ فیلدهای کنترل مراحل (برای راهنما و تایید مرحله بعد)
   stageProgress: {
     u1ReadyNext: { type: Boolean, default: false },
     u2ReadyNext: { type: Boolean, default: false },
     u1InstructionRead: { type: Boolean, default: false },
     u2InstructionRead: { type: Boolean, default: false },
   },
-  
-  // ✅✅✅ FIX MEHM: این فیلدها باید فلت باشند (بیرون از آبجکت) تا دکمه‌های آخر دیده شوند
   u1RevealDecision: { 
     type: String, 
     enum: ['pending', 'yes', 'no'], 
@@ -65,13 +62,17 @@ const BlindSessionSchema = new mongoose.Schema({
     enum: ['pending', 'yes', 'no'], 
     default: 'pending' 
   },
-  
   createdAt: {
     type: Date,
     default: Date.now,
-    expires: 3600,
   },
 });
+
+BlindSessionSchema.index({ participants: 1, status: 1 });
+BlindSessionSchema.index(
+  { createdAt: 1 },
+  { expireAfterSeconds: 86400, partialFilterExpression: { status: { $in: ["cancelled", "expired"] } } }
+);
 
 const BlindSession = mongoose.model("BlindSession", BlindSessionSchema);
 export default BlindSession;

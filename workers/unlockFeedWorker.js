@@ -78,10 +78,9 @@ const unlockFeedProcessor = async (job) => {
     console.log(`[unlockFeedWorker] ✅ Job ${job.id} completed`);
 };
 
-// Initialize Worker
 const unlockFeedWorker = new Worker("unlock-feed", unlockFeedProcessor, {
     connection: bullMQConnection,
-    concurrency: 5, // reasonable concurrency for feed generation
+    concurrency: 5,
     limiter: {
         max: 10,
         duration: 1000,
@@ -89,7 +88,6 @@ const unlockFeedWorker = new Worker("unlock-feed", unlockFeedProcessor, {
 });
 
 unlockFeedWorker.on("completed", () => {
-    // console.log(`[unlockFeedWorker] Job ${job.id} done`);
 });
 
 unlockFeedWorker.on("failed", (job, err) => {

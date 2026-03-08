@@ -96,6 +96,7 @@ const processRevenueCatWebhook = async (job) => {
           "subscription.expiresAt": expiresAt,
           "subscription.startedAt": startedAt || user.subscription?.startedAt || new Date(),
           "subscription.isTrial": false,
+          "subscription.trialExpiresAt": null,
         };
         break;
 
@@ -113,7 +114,7 @@ const processRevenueCatWebhook = async (job) => {
       case "SUBSCRIBER_ALIAS":
         update = {
           "subscription.status": "canceled",
-          "subscription.expiresAt": expiresAt, // Keep current access till expiry
+          "subscription.expiresAt": expiresAt,
         };
         break;
 

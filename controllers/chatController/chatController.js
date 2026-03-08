@@ -26,8 +26,9 @@ export const sendMessage = async (req, res) => {
     if (!receiverId) return res.status(400).json({ error: "receiverId is required" });
     if (!text && !fileUrl) return res.status(400).json({ error: "Empty message" });
 
-    if (fileUrl && !/^https:\/\/res\.cloudinary\.com\/.*/.test(fileUrl)) {
-      return res.status(400).json({ error: "Invalid file URL. Only Cloudinary URLs are allowed." });
+    // Allow both Cloudinary URLs and Base64 Data URLs for async processing
+    if (fileUrl && !/^https:\/\/res\.cloudinary\.com\/.*/.test(fileUrl) && !/^data:/.test(fileUrl)) {
+      return res.status(400).json({ error: "Invalid file URL. Only Cloudinary URLs or Data URLs are allowed." });
     }
 
     const cleanText = text

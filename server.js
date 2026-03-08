@@ -7,7 +7,6 @@ import { Server } from "socket.io";
 import helmet from "helmet";
 import compression from "compression";
 import rateLimit from "express-rate-limit";
-import hpp from "hpp";
 import morgan from "morgan";
 import mongoose from "mongoose";
 import connectDB from "./config/db.js";
@@ -231,7 +230,17 @@ app.use(express.urlencoded({ limit: "10mb", extended: true }));
 app.use(cookieParser());
 
 app.use(mongoSanitize());
-app.use(hpp());
+
+app.use((req, res, next) => {
+  if (req.query) {
+    for (const key in req.query) {
+      if (Array.isArray(req.query[key])) {
+        req.query[key] = req.query[key][0];
+      }
+    }
+  }
+  next();
+});
 
 const io = new Server(server, {
   cors: {
@@ -328,7 +337,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/seo", seoRoutes);
 
 app.get("/ping", (req, res) => {
-  res.status(200).send("pong 🏓");
+  res.status(200).send("pong \uD83C\uDFD3");
 });
 
 app.get("/health", async (req, res) => {

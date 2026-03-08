@@ -32,7 +32,6 @@ const goDateSchema = new mongoose.Schema({
     default: "split",
   },
   preferences: {
-    // ✅ اصلاح شده: 'all' حذف شد و 'other' اضافه شد
     gender: {
       type: String,
       enum: ["male", "female", "other"],
@@ -68,8 +67,12 @@ goDateSchema.index({
   dateTime: 1,
 });
 
-// For owner queries and performance
 goDateSchema.index({ creator: 1, createdAt: -1 });
+
+goDateSchema.index(
+  { createdAt: 1 },
+  { expireAfterSeconds: 86400, partialFilterExpression: { status: { $in: ["cancelled", "expired"] } } }
+);
 
 const GoDate = mongoose.model("GoDate", goDateSchema);
 export default GoDate;

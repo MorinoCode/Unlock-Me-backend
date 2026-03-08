@@ -1,8 +1,3 @@
-/**
- * ✅ Security Fix: Token Refresh Endpoint
- * Allows users to refresh their access token using refresh token
- */
-
 import jwt from "jsonwebtoken";
 import User from "../../models/User.js";
 
@@ -28,26 +23,21 @@ export const refreshToken = async (req, res) => {
         return res.status(401).json({ message: "User not found" });
       }
       
-      // Check if refresh token matches stored token
       if (user.refreshToken !== refreshToken) {
         return res.status(401).json({ message: "Invalid refresh token" });
       }
       
-      // Generate new access token
       const accessToken = jwt.sign(
         { userId: user._id, role: user.role, username: user.username, type: 'access' },
         process.env.JWT_SECRET,
-        { expiresIn: "15m" } // ✅ Security Fix: 15m access token
+        { expiresIn: "15m" } 
       );
-      
-      const isProduction = process.env.NODE_ENV === "production";
       
       res.cookie("unlock-me-token", accessToken, {
         httpOnly: true,
-        secure: isProduction,
-        sameSite: "lax",
-        domain: isProduction ? ".unlock-me.app" : undefined,
-        maxAge: 15 * 60 * 1000, // 15 minutes
+        secure: true,
+        sameSite: "strict",
+        maxAge: 15 * 60 * 1000, 
       });
       
       res.status(200).json({ 
@@ -63,7 +53,6 @@ export const refreshToken = async (req, res) => {
     }
     
   } catch (error) {
-    console.error("Refresh Token Error:", error);
     const errorMessage = process.env.NODE_ENV === 'production' 
       ? "Server error. Please try again later." 
       : error.message;

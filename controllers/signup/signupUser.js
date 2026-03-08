@@ -9,27 +9,21 @@ export const signupUser = async (req, res) => {
   try {
     let { name, username, email, password, gender, lookingFor } = req.body;
 
-    // ✅ Security Fix: Backend validation (even though middleware validates, double-check here)
     const passwordValidation = validatePassword(password);
     if (!passwordValidation.valid) {
       return res.status(400).json({ message: passwordValidation.message });
     }
 
-    // 1. نرمال‌سازی داده‌ها
     email = email.toLowerCase();
     username = username.toLowerCase();
-    // نکته: name را دستکاری نمی‌کنیم تا حروف بزرگ کاربر حفظ شود
 
-    // 2. چک کردن کلمات ممنوعه
     if (username && FORBIDDEN_USERNAMES.includes(username)) {
       return res.status(400).json({ message: "This username is not allowed (Reserved word)." });
     }
 
-    // 3. هش کردن پسورد
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // 5. ساخت کاربر با 7 روز Platinum Trial رایگان
     const trialExpiresAt = new Date();
     trialExpiresAt.setDate(trialExpiresAt.getDate() + 7);
 
@@ -53,9 +47,6 @@ export const signupUser = async (req, res) => {
     try {
       await newUser.save();
     } catch (saveError) {
-      // ✅ 1M Scale Security Fix: Atomic Duplicate Checking
-      // Instead of querying first (which can cause a race condition if 2 requests come at the exact same millisecond),
-      // we let MongoDB enforce the uniqueness atomically and catch the specific Error Code 11000.
       if (saveError.code === 11000) {
         if (saveError.keyPattern && saveError.keyPattern.email) {
           return res.status(400).json({ message: "Email already exists" });
@@ -65,18 +56,15 @@ export const signupUser = async (req, res) => {
         }
         return res.status(400).json({ message: "Account already exists with these credentials." });
       }
-      throw saveError; // Re-throw if it's not a duplicate key error
+      throw saveError; 
     }
 
-    // ✅ Security Fix: Shorter token expiration + refresh token
-    // Access token: 1 hour (was 7 days)
     const accessToken = jwt.sign(
       { userId: newUser._id, role: newUser.role, username: newUser.username, type: 'access' },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" } // ✅ Security Fix: Ultra-short access token
+      { expiresIn: "15m" } 
     );
     
-    // Refresh token: 7 days
     const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
     const refreshToken = jwt.sign(
       { userId: newUser._id, type: 'refresh' },
@@ -84,37 +72,26 @@ export const signupUser = async (req, res) => {
       { expiresIn: "7d" }
     );
     
-    // Store refresh token in user document (for future token refresh endpoint)
     await User.findByIdAndUpdate(newUser._id, { 
       refreshToken: refreshToken 
     });
 
-   const isProduction = process.env.NODE_ENV === "production";
-
-    // ✅ Security Fix: Set access token cookie (1 hour)
     res.cookie("unlock-me-token", accessToken, {
       httpOnly: true,
-      secure: isProduction, 
-      sameSite: "lax", 
-      domain: isProduction ? ".unlock-me.app" : undefined, 
-      maxAge: 15 * 60 * 1000, // 15 minutes
+      secure: true, 
+      sameSite: "strict", 
+      maxAge: 15 * 60 * 1000, 
     });
     
-    // ✅ Security Fix: Set refresh token cookie (7 days)
     res.cookie("unlock-me-refresh-token", refreshToken, {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: "lax",
-      domain: isProduction ? ".unlock-me.app" : undefined,
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      secure: true,
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000, 
     });
 
-    // ✅ Trigger Redis Sync (Add new user to Explore)
     const { dispatchExploreSync } = await import("../../utils/workerDispatcher.js");
-    dispatchExploreSync(newUser._id, null); // New user has no "old data"
-    
-    // ❌ REMOVED: Worker execution moved to Analysis Page
-    // Workers will run AFTER onboarding when user info is complete
+    dispatchExploreSync(newUser._id, null); 
     
     res.status(201).json({
       message: "User registered successfully",
@@ -128,8 +105,6 @@ export const signupUser = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Signup Error:", err);
-    // ✅ Security Fix: Don't expose error details in production
     const errorMessage = process.env.NODE_ENV === 'production' 
       ? "Server error. Please try again later." 
       : err.message;

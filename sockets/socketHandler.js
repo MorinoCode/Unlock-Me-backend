@@ -1,36 +1,33 @@
 import BlindSession from "../models/BlindSession.js";
 import BlindQuestion from "../models/BlindQuestion.js";
 import Conversation from "../models/Conversation.js";
-import mongoose from "mongoose"; // ✅ Critical Fix: For transactions
+import mongoose from "mongoose";
+import redisClient from "../config/redis.js";
 
 import { addToQueue, leaveQueue } from "../utils/blindDateService.js";
 
-// ✅ No more local blindQueue array or local locks.
-// Redis sharding and atomic updates are handled in blindDateService.
-
-
-
-
-export const handleSocketConnection = (io, socket, userSocketMap) => {
+export const handleSocketConnection = (io, socket) => {
   const userId = socket.handshake.query.userId;
 
   // ✅ FIX #5: Support multi-device — store a Set of socketIds per userId
   if (userId && userId !== "undefined") {
     socket.userId = userId;
     socket.join(userId);
-    if (!userSocketMap.has(userId)) userSocketMap.set(userId, new Set());
-    userSocketMap.get(userId).add(socket.id);
+    redisClient.setEx(`user:presence:${userId}`, 60, socket.id).catch(() => {});
   }
 
-  // Handle join_room event (for userId room joining)
+  socket.on("heartbeat", () => {
+    if (socket.userId) {
+      redisClient.setEx(`user:presence:${socket.userId}`, 60, socket.id).catch(() => {});
+    }
+  });
+
   socket.on("join_room", (userId) => {
     if (!userId) return;
     const roomName = String(userId);
     socket.userId = roomName;
     socket.join(roomName);
-    if (!userSocketMap.has(roomName)) userSocketMap.set(roomName, new Set());
-    userSocketMap.get(roomName).add(socket.id);
-    console.log(`[Socket] User ${userId} joined room: ${roomName}, socket ID: ${socket.id}`);
+    redisClient.setEx(`user:presence:${roomName}`, 60, socket.id).catch(() => {});
   });
 
   socket.on("join_blind_queue", async (data) => {
@@ -45,21 +42,14 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
       socket.userId = normalizedUserId;
       socket.join(normalizedUserId);
 
-      // ✅ Track user country for disconnect cleanup
       socket.userCountry = data.criteria?.location?.country || "World";
 
-      console.log(`[Blind Queue] User ${normalizedUserId} joining Redis-sharded queue (Country: ${socket.userCountry})`);
-
-      // ✅ Use Enterprise Standard Service
       const result = await addToQueue(normalizedUserId, data.criteria);
 
       if (result.status === "matched") {
         const { session } = result;
         const payload = JSON.parse(JSON.stringify(session));
 
-        console.log(`[Blind Queue] ✅ MATCH FOUND via Redis: ${session.participants[0].name} <-> ${session.participants[1].name}`);
-
-        // Notify both participants in their dedicated rooms
         session.participants.forEach(p => {
             io.to(p._id.toString()).emit("match_found", payload);
         });
@@ -70,38 +60,31 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
         socket.emit("error", { message: result.error });
       }
     } catch (err) {
-      console.error("[Blind Queue] Join Error:", err);
       socket.emit("error", { message: "Failed to join queue" });
     }
   });
 
   socket.on("leave_blind_queue", async () => {
-    // Migrated to Redis-safe cleanup O(1)
     const country = socket.userCountry || "World";
     await leaveQueue(socket.userId, country);
-    console.log(`[Blind Queue] User ${socket.userId} left queue explicitly`);
   });
 
   socket.on("confirm_instructions", async ({ sessionId }) => {
     try {
-      // ✅ CRITICAL FIX #2: Fully atomic — determine user key + set flag in ONE query.
-      // First, identify which participant this socket is (no separate read needed).
       const sessionCheck = await BlindSession.findOne(
         { _id: sessionId, status: "instructions" }
       ).select("participants stageProgress");
-      if (!sessionCheck) return; // Already transitioned or doesn't exist
+      if (!sessionCheck) return;
 
       const isUser1 = sessionCheck.participants[0].toString() === socket.userId;
       const isUser2 = sessionCheck.participants[1].toString() === socket.userId;
-      if (!isUser1 && !isUser2) return; // Not a participant
+      if (!isUser1 && !isUser2) return;
 
       const userKey = isUser1 ? "u1InstructionRead" : "u2InstructionRead";
       const otherKey = isUser1 ? "u2InstructionRead" : "u1InstructionRead";
       const otherAlreadyRead = sessionCheck.stageProgress?.[otherKey] === true;
 
       if (otherAlreadyRead) {
-        // ✅ ATOMIC: Both ready — transition status AND set flag in ONE operation.
-        // The status filter `"instructions"` guarantees only ONE server wins this race.
         const activeSession = await BlindSession.findOneAndUpdate(
           { _id: sessionId, status: "instructions" },
           { $set: { [`stageProgress.${userKey}`]: true, status: "active", currentStage: 1 } },
@@ -112,11 +95,9 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
           io.to(activeSession.participants[0].toString()).emit("session_update", activeSession);
           io.to(activeSession.participants[1].toString()).emit("session_update", activeSession);
         }
-        // If activeSession is null, another server already did the transition — no-op is correct.
         return;
       }
 
-      // Only this user confirmed so far — just set their flag
       const updatedSession = await BlindSession.findOneAndUpdate(
         { _id: sessionId, status: "instructions" },
         { $set: { [`stageProgress.${userKey}`]: true } },
@@ -127,9 +108,7 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
         io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
         io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
       }
-    } catch (err) {
-      console.error("Confirm Instructions Error:", err);
-    }
+    } catch (err) { }
   });
 
   socket.on("typing", ({ receiverId, senderId }) => {
@@ -142,7 +121,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
 
   socket.on("submit_blind_answer", async ({ sessionId, choiceIndex }) => {
     try {
-      // Fetch initial state to get current index and check participant
       const sessionInfo = await BlindSession.findById(sessionId).select('participants currentQuestionIndex status currentStage');
       if (!sessionInfo || sessionInfo.status !== "active") return;
 
@@ -153,7 +131,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
       const userKey = isUser1 ? 'u1Answer' : 'u2Answer';
       const questionIndex = sessionInfo.currentQuestionIndex;
 
-      // 1. ATOMIC UPDATE: Set answer only if it is null and we are still on the same question index
       let updatedSession = await BlindSession.findOneAndUpdate(
         { 
           _id: sessionId, 
@@ -167,7 +144,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
       ).populate("questions.questionId");
 
       if (!updatedSession) {
-         // Race condition caught: Either already answered, or index moved on. Fetch latest to ensure UI sync.
          updatedSession = await BlindSession.findById(sessionId).populate("questions.questionId");
          if (updatedSession) {
             io.to(sessionInfo.participants[0].toString()).emit("session_update", updatedSession);
@@ -176,7 +152,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
          return;
       }
 
-      // 2. CHECK: After atomic update, check if BOTH users have answered
       const currentQ = updatedSession.questions[questionIndex];
       if (currentQ.u1Answer !== null && currentQ.u2Answer !== null) {
         const maxIndex = updatedSession.questions.length - 1;
@@ -193,7 +168,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
         }
 
         if (updateQuery) {
-          // 3. ATOMIC ADVANCE: Only advance if the index hasn't been advanced yet by the other thread
           const finalSession = await BlindSession.findOneAndUpdate(
             { _id: sessionId, currentQuestionIndex: questionIndex },
             updateQuery,
@@ -201,20 +175,17 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
           ).populate("questions.questionId");
 
           if (finalSession) {
-             updatedSession = finalSession; // Set for broadcast
+             updatedSession = finalSession; 
           }
         }
       }
 
-      // 4. BROADCAST state to users
       const roomId = `blind_${sessionId}`;
       io.to(roomId).emit("session_update", updatedSession);
       io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
       io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
 
-    } catch (err) {
-      console.error("Submit Blind Answer Error:", err);
-    }
+    } catch (err) { }
   });
 
   socket.on("proceed_to_next_stage", async ({ sessionId }) => {
@@ -232,8 +203,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
       ).populate("questions.questionId");
 
       if (updatedSession.stageProgress.u1ReadyNext && updatedSession.stageProgress.u2ReadyNext) {
-        
-        // Prepare questions if advancing to stage 2
         let updateQuery = { $set: { status: "active", 'stageProgress.u1ReadyNext': false, 'stageProgress.u2ReadyNext': false }, $inc: { currentStage: 1, currentQuestionIndex: 1 } };
         
         if (updatedSession.currentStage === 1) {
@@ -250,7 +219,7 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
         }
 
         const activeSession = await BlindSession.findOneAndUpdate(
-          { _id: sessionId, status: updatedSession.status }, // atomic transition check
+          { _id: sessionId, status: updatedSession.status }, 
           updateQuery,
           { new: true }
         ).populate("questions.questionId");
@@ -262,13 +231,10 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
         }
       }
 
-      // If not transitioning, broadcast the ready status
       io.to(updatedSession.participants[0].toString()).emit("session_update", updatedSession);
       io.to(updatedSession.participants[1].toString()).emit("session_update", updatedSession);
 
-    } catch (err) {
-      console.error("Proceed Error:", err);
-    }
+    } catch (err) { }
   });
 
   socket.on("send_blind_message", async ({ sessionId, text }) => {
@@ -292,13 +258,10 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
         "session_update",
         updatedSession
       );
-    } catch (err) {
-      console.error(err);
-    }
+    } catch (err) { }
   });
 
   socket.on("submit_reveal_decision", async ({ sessionId, decision }) => {
-    // ✅ Critical Fix: Use MongoDB transaction to prevent race conditions
     const dbSession = await mongoose.startSession();
     dbSession.startTransaction();
 
@@ -309,7 +272,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
         return;
       }
 
-      // ✅ Critical Fix: Atomic update
       if (session.participants[0].toString() === socket.userId) {
         session.u1RevealDecision = decision;
       } else {
@@ -327,7 +289,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
         ) {
           session.status = "completed";
 
-          // ✅ آنلاک چت برای مچ Blind Date (همان منطق handleRevealDecision)
           const [p1, p2] = session.participants;
           let conversation = await Conversation.findOne({
             participants: { $all: [p1, p2] },
@@ -368,7 +329,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
       );
     } catch (err) {
       await dbSession.abortTransaction();
-      console.error("Submit Reveal Decision Error:", err);
     } finally {
       dbSession.endSession();
     }
@@ -376,11 +336,9 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
 
   socket.on("disconnect", async () => {
     if (socket.userId) {
-      // 1. Remove from Redis Blind Queue (Sharded) O(1)
       const country = socket.userCountry || "World";
       await leaveQueue(socket.userId, country);
 
-      // 2. Identify and Notify/Cancel Active Blind Sessions
       try {
           const activeSession = await BlindSession.findOne({
               participants: socket.userId,
@@ -391,7 +349,6 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
               activeSession.status = "cancelled";
               await activeSession.save();
               
-              // Notify the other participant
               const partnerId = activeSession.participants.find(p => p.toString() !== socket.userId);
               if (partnerId) {
                   io.to(partnerId.toString()).emit("session_cancelled", { 
@@ -399,22 +356,11 @@ export const handleSocketConnection = (io, socket, userSocketMap) => {
                       sessionId: activeSession._id
                   });
               }
-              console.log(`[Socket] 🛑 Active Blind Session ${activeSession._id} cancelled due to disconnect`);
           }
-      } catch (err) {
-          console.error("[Socket] Session Cleanup Error:", err);
-      }
+      } catch (err) {}
 
-      // ✅ FIX #5: Multi-device cleanup — only remove THIS socket from the Set
-      const socketSet = userSocketMap.get(socket.userId);
-      if (socketSet) {
-        socketSet.delete(socket.id);
-        if (socketSet.size === 0) userSocketMap.delete(socket.userId);
-      }
       const roomName = String(socket.userId);
       socket.leave(roomName);
-      console.log(`[Socket] Room ${roomName} left by socket ${socket.id} (user ${socket.userId})`);
     }
-    console.log(`👋 User disconnected: ${socket.userId || socket.id}`);
   });
 };

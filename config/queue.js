@@ -1,11 +1,10 @@
 import { Queue } from "bullmq";
 import { bullMQConnection } from "./redis.js";
 
-// Create a new queue instance
 const defaultJobOptions = {
-    removeOnComplete: true, // Automatically remove successful jobs
-    removeOnFail: 1000,    // Keep last 1000 failed jobs for debugging
-    attempts: 3,           // Retry 3 times
+    removeOnComplete: true,
+    removeOnFail: 1000,
+    attempts: 3,
     backoff: {
         type: "exponential",
         delay: 1000,
@@ -56,3 +55,8 @@ console.log("✅ [Queue] Analysis, Explore, GoDate, unlock, Notification, Media,
 
 export { analysisQueue, exploreQueue, godateQueue, unlockActionQueue, notificationQueue, mediaQueue, onboardingQueue, messageQueue };
 
+export { 
+  analysisQueue, exploreQueue, godateQueue, unlockActionQueue, 
+  notificationQueue, mediaQueue, onboardingQueue, messageQueue,
+  soulmateProducerQueue, soulmateConsumerQueue, arrayCleanupQueue, trialExpirationQueue
+};

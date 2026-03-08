@@ -4,6 +4,7 @@ import Message from "../models/Message.js";
 import Conversation from "../models/Conversation.js";
 import redisClient from "../config/redis.js";
 import { invalidateMatchesCache } from "../utils/cacheHelper.js";
+import cloudinary from "../config/cloudinary.js"; // ✅ Import Cloudinary
 
 const invalidateInboxForUser = (userId) =>
   Promise.all([
@@ -18,14 +19,41 @@ const messageWorker = new Worker(
     try {
       const { newMessage, senderId, receiverId, conversationId } = job.data;
 
-      // 1. Save Message to MongoDB
+      // ✅ 1. Check if fileUrl is Base64 (starts with 'data:')
+      // If it is, upload it to Cloudinary FIRST
+      if (newMessage.fileUrl && newMessage.fileUrl.startsWith("data:")) {
+        console.log(`[MessageWorker] Uploading Base64 ${newMessage.fileType} to Cloudinary...`);
+        
+        let uploadOptions = {
+          folder: "unlock_me_chat_media",
+          resource_type: newMessage.fileType === "audio" ? "video" : "auto",
+        };
+
+        // If it's audio, force mp3 format for better compatibility
+        if (newMessage.fileType === "audio") {
+          uploadOptions.format = "mp3";
+        }
+
+        const uploadRes = await cloudinary.uploader.upload(newMessage.fileUrl, uploadOptions);
+        newMessage.fileUrl = uploadRes.secure_url; // Replace Base64 with Cloudinary URL
+        console.log(`[MessageWorker] Cloudinary upload success: ${newMessage.fileUrl}`);
+      }
+
+      // 2. Save Message to MongoDB (Now with a real URL if it was Base64)
       const savedMessage = await Message.create(newMessage);
 
-      // 2. Safely Update Conversation Last Message (Atomic)
+      // 3. Safely Update Conversation Last Message (Atomic)
+      let lastMsgText = newMessage.text;
+      if (!lastMsgText) {
+        if (newMessage.fileType === "image") lastMsgText = "📷 Image";
+        else if (newMessage.fileType === "audio") lastMsgText = "🎤 Voice Message";
+        else lastMsgText = "📄 File";
+      }
+
       await Conversation.findByIdAndUpdate(conversationId, {
         $set: {
           lastMessage: {
-            text: newMessage.text || (newMessage.fileType === "image" ? "📷 Image" : "📄 File"),
+            text: lastMsgText,
             sender: senderId,
             createdAt: newMessage.createdAt,
           }

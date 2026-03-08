@@ -122,7 +122,7 @@ const soulmateProcessor = async (job) => {
       try {
         await computeSoulmatesForUser(user);
         processed++;
-      } catch (err) {
+      } catch {
         errors++;
       }
     }

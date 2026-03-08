@@ -23,7 +23,7 @@ const soulmateProducerQueue = new Queue("soulmate-producer-queue", { connection:
 const soulmateConsumerQueue = new Queue("soulmate-consumer-queue", { connection: bullMQConnection, defaultJobOptions });
 const arrayCleanupQueue = new Queue("array-cleanup-queue", { connection: bullMQConnection, defaultJobOptions });
 const trialExpirationQueue = new Queue("trial-expiration-queue", { connection: bullMQConnection, defaultJobOptions });
-
+//check
 const initRepeatableJobs = async () => {
   try {
     await soulmateProducerQueue.add("soulmate-producer-job", {}, {

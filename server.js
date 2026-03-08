@@ -291,7 +291,7 @@ io.use((socket, next) => {
     socket.userId = decoded.userId?.toString();
     socket.handshake.query.userId = socket.userId;
     next();
-  } catch (err) {
+  } catch {
     next(new Error("Authentication failed"));
   }
 });
@@ -354,7 +354,7 @@ app.get("/health", async (req, res) => {
   res.status(statusCode).json(health);
 });
 
-app.use((err, req, res, next) => {
+app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   if (err.message === "CORS_ERROR") {
     return res.status(403).json({
       success: false,

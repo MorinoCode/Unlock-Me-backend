@@ -6,34 +6,30 @@ import { cleanupUserArrays } from "../utils/arrayLimiter.js";
 const arrayCleanupProcessor = async (job) => {
   const startTime = Date.now();
 
-  try {
-    const users = await User.find({
-      $or: [
-        { $expr: { $gt: [{ $size: "$likedUsers" }, 5000] } },
-        { $expr: { $gt: [{ $size: "$dislikedUsers" }, 20000] } },
-        { $expr: { $gt: [{ $size: "$potentialMatches" }, 500] } },
-        { $expr: { $gt: [{ $size: "$matches" }, 5000] } }
-      ]
-    }).select("_id").lean();
-    
-    let cleaned = 0;
-    for (let i = 0; i < users.length; i++) {
-      const user = users[i];
-      try {
-        await cleanupUserArrays(user._id);
-        cleaned++;
-        await job.updateProgress(Math.floor(((i + 1) / users.length) * 100));
-      } catch (error) {
-        console.error(error);
-      }
+  const users = await User.find({
+    $or: [
+      { $expr: { $gt: [{ $size: "$likedUsers" }, 5000] } },
+      { $expr: { $gt: [{ $size: "$dislikedUsers" }, 20000] } },
+      { $expr: { $gt: [{ $size: "$potentialMatches" }, 500] } },
+      { $expr: { $gt: [{ $size: "$matches" }, 5000] } }
+    ]
+  }).select("_id").lean();
+  
+  let cleaned = 0;
+  for (let i = 0; i < users.length; i++) {
+    const user = users[i];
+    try {
+      await cleanupUserArrays(user._id);
+      cleaned++;
+      await job.updateProgress(Math.floor(((i + 1) / users.length) * 100));
+    } catch (error) {
+      console.error(error);
     }
-    
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-
-    return { success: true, usersCleaned: cleaned, duration };
-  } catch (error) {
-    throw error;
   }
+  
+  const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+  return { success: true, usersCleaned: cleaned, duration };
 };
 
 const arrayCleanupWorker = new Worker("array-cleanup-queue", arrayCleanupProcessor, {

@@ -214,7 +214,7 @@ export const sendMessage = async (req, res) => {
     });
 
     res.status(201).json(newMessage);
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error. Please try again later." });
   }
 };
@@ -316,7 +316,7 @@ export const getConversations = async (req, res) => {
     }
 
     res.status(200).json(conversationsWithUnread);
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error. Please try again later." });
   }
 };
@@ -356,7 +356,7 @@ export const getMessages = async (req, res) => {
     }
 
     res.status(200).json(messages);
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -395,7 +395,7 @@ export const getUnreadMessagesCount = async (req, res) => {
     const payload = { count };
     await setMatchesCache(myId, "unread_count", payload, UNREAD_COUNT_CACHE_TTL);
     res.status(200).json(payload);
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -424,7 +424,7 @@ export const markAsRead = async (req, res) => {
     io.to(otherUserId).emit("messages_seen", { seenBy: myId });
 
     res.status(200).json({ message: "Marked read" });
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -454,7 +454,7 @@ export const editMessage = async (req, res) => {
       });
 
     res.status(200).json(message);
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -483,7 +483,7 @@ export const deleteMessage = async (req, res) => {
       .emit("message_deleted", id);
 
     res.status(200).json({ message: "Deleted successfully" });
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -516,7 +516,7 @@ export const reactToMessage = async (req, res) => {
       });
 
     res.status(200).json(message);
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -553,7 +553,7 @@ export const acceptRequest = async (req, res) => {
     });
 
     res.status(200).json({ message: "Request accepted", conversation });
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -581,7 +581,7 @@ export const rejectRequest = async (req, res) => {
     if (initiatorId) invalidateInboxForUser(initiatorId);
 
     res.status(200).json({ message: "Request rejected and deleted" });
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -612,7 +612,7 @@ export const hideConversation = async (req, res) => {
     invalidateInboxForUser(userId);
 
     res.status(200).json({ message: "Conversation hidden from your list" });
-  } catch (error) {
+  } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ error: "Server error" });
   }
 };

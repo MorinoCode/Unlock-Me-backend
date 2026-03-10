@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import { bullMQConnection } from "../config/redis.js";
 import Message from "../models/Message.js";
@@ -5,13 +6,15 @@ import Conversation from "../models/Conversation.js";
 import redisClient from "../config/redis.js";
 import { invalidateMatchesCache } from "../utils/cacheHelper.js";
 import cloudinary from "../config/cloudinary.js"; // ✅ Import Cloudinary
+import { sendPush } from "../services/fcmService.js";
+import User from "../models/User.js";
 
 const invalidateInboxForUser = (userId) =>
   Promise.all([
     invalidateMatchesCache(userId, "conversations_active"),
     invalidateMatchesCache(userId, "conversations_requests"),
     invalidateMatchesCache(userId, "unread_count"),
-  ]).catch((err) => console.error("Inbox cache invalidation error:", err));
+  ]).catch((err) => logger.error("Inbox cache invalidation error:", err));
 
 const messageWorker = new Worker(
   "message-queue",
@@ -22,7 +25,7 @@ const messageWorker = new Worker(
       // ✅ 1. Check if fileUrl is Base64 (starts with 'data:')
       // If it is, upload it to Cloudinary FIRST
       if (newMessage.fileUrl && newMessage.fileUrl.startsWith("data:")) {
-        console.log(`[MessageWorker] Uploading Base64 ${newMessage.fileType} to Cloudinary...`);
+        logger.info(`[MessageWorker] Uploading Base64 ${newMessage.fileType} to Cloudinary...`);
         
         let uploadOptions = {
           folder: "unlock_me_chat_media",
@@ -36,7 +39,7 @@ const messageWorker = new Worker(
 
         const uploadRes = await cloudinary.uploader.upload(newMessage.fileUrl, uploadOptions);
         newMessage.fileUrl = uploadRes.secure_url; // Replace Base64 with Cloudinary URL
-        console.log(`[MessageWorker] Cloudinary upload success: ${newMessage.fileUrl}`);
+        logger.info(`[MessageWorker] Cloudinary upload success: ${newMessage.fileUrl}`);
       }
 
       // 2. Save Message to MongoDB (Now with a real URL if it was Base64)
@@ -64,6 +67,10 @@ const messageWorker = new Worker(
       // 3. Invalidate Redis Caches
       await invalidateInboxForUser(senderId);
       await invalidateInboxForUser(receiverId);
+      
+      // Invalidate specific chat caches so the initial load gets the new message
+      await invalidateMatchesCache(senderId, `chat_${receiverId}`);
+      await invalidateMatchesCache(receiverId, `chat_${senderId}`);
 
       // 4. Emit Sub/Pub notification for Sockets
       await redisClient.publish(
@@ -76,9 +83,27 @@ const messageWorker = new Worker(
           message: savedMessage,
         })
       );
+
+      // 5. Send FCM Push Notification
+      try {
+        const sender = await User.findById(senderId).select("name").lean();
+        const senderName = sender ? sender.name : "Someone";
+        
+        await sendPush(receiverId, {
+          title: `New message from ${senderName}`,
+          body: lastMsgText, // Reusing atomic resolution from above (deals with images/audio)
+          data: {
+            type: "NEW_CHAT_MESSAGE",
+            conversationId: conversationId.toString(),
+            senderId: senderId.toString()
+          }
+        });
+      } catch (pushErr) {
+        logger.error("❌ Message Worker - FCM Push Error:", pushErr);
+      }
       
     } catch (error) {
-       console.error("❌ Message Worker Error:", error);
+       logger.error("❌ Message Worker Error:", error);
        throw error;
     }
   },
@@ -91,13 +116,13 @@ const messageWorker = new Worker(
 );
 
 messageWorker.on("completed", () => {
-  // console.log(`✅ Message Processed: ${job.id}`);
+  // logger.info(`✅ Message Processed: ${job.id}`);
 });
 
 messageWorker.on("failed", (job, err) => {
-  console.error(`❌ Message Queue Failed ${job?.id}:`, err.message);
+  logger.error(`❌ Message Queue Failed ${job?.id}:`, err.message);
 });
 
-console.log("👷 Message Queue Worker Running...");
+logger.info("👷 Message Queue Worker Running...");
 
 export default messageWorker;

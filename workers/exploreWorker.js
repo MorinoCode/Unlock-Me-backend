@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 
 import { Worker } from "bullmq";
 import { addToExploreIndex, removeFromExploreIndex } from "../utils/redisMatchHelper.js";
@@ -15,9 +16,9 @@ const connectMongo = async () => {
     if (mongoose.connection.readyState === 0) {
         try {
             await mongoose.connect(MONGO_URI);
-            console.log("✅ Explore Worker Connected to MongoDB");
+            logger.info("✅ Explore Worker Connected to MongoDB");
         } catch (err) {
-            console.error("❌ Explore Worker MongoDB Error:", err);
+            logger.error("❌ Explore Worker MongoDB Error:", err);
             process.exit(1);
         }
     }
@@ -25,7 +26,7 @@ const connectMongo = async () => {
 
 const workerHandler = async (job) => {
     const { type, userId, oldData } = job.data;
-    // console.log(`[ExploreWorker] Processing ${type} for ${userId}`);
+    // logger.info(`[ExploreWorker] Processing ${type} for ${userId}`);
 
     try {
         await connectMongo();
@@ -39,16 +40,16 @@ const workerHandler = async (job) => {
                 }
                 // 2. Add current indices
                 await addToExploreIndex(user);
-                 // console.log(`✅ Synced User ${userId}`);
+                 // logger.info(`✅ Synced User ${userId}`);
             }
         } else if (type === "REMOVE_USER") {
              if (oldData) {
                 await removeFromExploreIndex({ _id: userId, ...oldData });
-                console.log(`🗑️ Removed User ${userId} from Explore`);
+                logger.debug(`🗑️ Removed User ${userId} from Explore`);
             }
         }
     } catch (err) {
-        console.error(`❌ [ExploreWorker] Job Failed: ${err.message}`);
+        logger.error(`❌ [ExploreWorker] Job Failed: ${err.message}`);
         throw err;
     }
 };
@@ -60,22 +61,22 @@ const exploreWorker = new Worker("explore-queue", workerHandler, {
 });
 
 exploreWorker.on("completed", () => {
-    // console.log(`[ExploreWorker] Job ${job.id} completed`);
+    // logger.info(`[ExploreWorker] Job ${job.id} completed`);
 });
 
 exploreWorker.on("failed", (job, err) => {
-    console.error(`[ExploreWorker] Job ${job.id} failed: ${err.message}`);
+    logger.error(`[ExploreWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("🚀 Explore Worker Started (BullMQ: explore-queue)...");
+logger.info("🚀 Explore Worker Started (BullMQ: explore-queue)...");
 
 // ✅ Crash Protection
 process.on("unhandledRejection", (reason, promise) => {
-    console.error("🚨 [ExploreWorker] Unhandled Rejection at:", promise, "reason:", reason);
+    logger.error("🚨 [ExploreWorker] Unhandled Rejection at:", promise, "reason:", reason);
 });
 
 process.on("uncaughtException", (err) => {
-    console.error("🚨 [ExploreWorker] Uncaught Exception:", err);
+    logger.error("🚨 [ExploreWorker] Uncaught Exception:", err);
 });
 
 export default exploreWorker;

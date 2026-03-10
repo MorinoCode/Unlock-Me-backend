@@ -27,9 +27,8 @@ export const getUserLocation = async (req, res) => {
 
 export const getExploreMatches = async (req, res) => {
   const start = Date.now();
-  const { forceRefresh, category, page = 1, limit = 20 } = req.query; // Added category, page, limit
+  const { forceRefresh, category, page = 1, limit = 20 } = req.query;
 
-  // ✅ CASE 1: View All / Category Pagination
   if (category) {
     try {
       return await handleCategoryPagination(req, res, category, page, limit);
@@ -39,7 +38,6 @@ export const getExploreMatches = async (req, res) => {
     }
   }
 
-  // ✅ CASE 2: Main Explore Page (All Sections)
   console.log(`\n========================================`);
   console.log(`[Explore] 📋 GET REQUEST for user: ${req.user.userId}`);
   console.log(`========================================`);
@@ -47,7 +45,6 @@ export const getExploreMatches = async (req, res) => {
   try {
     console.log(`[Explore] ForceRefresh: ${!!forceRefresh}`);
 
-    // ✅ NEW: Check Redis for 5-section data
     const cacheKey = `analysis:sections:${req.user.userId}`;
     console.log(`[Explore] Checking Redis cache: ${cacheKey}`);
     
@@ -58,7 +55,7 @@ export const getExploreMatches = async (req, res) => {
       if (cachedSections) {
         sections = JSON.parse(cachedSections);
         console.log(`✅ [Explore] CACHE HIT! (${Date.now() - start}ms)`);
-        res.set('X-Cache', 'HIT'); // ✅ Checkable in Browser Network Tab
+        res.set('X-Cache', 'HIT'); 
       } else {
         console.log(`⚠️ [Explore] CACHE MISS! Generating fresh data...`);
         res.set('X-Cache', 'MISS');
@@ -85,12 +82,11 @@ export const getExploreMatches = async (req, res) => {
       });
     }
 
-    // ✅ MAP BACKEND KEYS TO FRONTEND KEYS
     const mappedSections = {
       cityMatches: sections.nearYou || [],
       freshFaces: sections.freshFaces || [],
       interestMatches: sections.compatibilityVibes || [],
-      soulmates: null, // Special box (no users)
+      soulmates: null,
       countryMatches: sections.acrossTheCountry || []
     };
 
@@ -105,7 +101,7 @@ export const getExploreMatches = async (req, res) => {
         isPremiumFeature: true,
         requiresPlan: ["gold", "platinum"]
       },
-      cached: false // Simplified
+      cached: false 
     });
 
   } catch (err) {
@@ -114,9 +110,7 @@ export const getExploreMatches = async (req, res) => {
   }
 };
 
-// Helper for Category Pagination
 const handleCategoryPagination = async (req, res, category, page, limit) => {
-  // Map frontend category to backend section key
   const categoryMap = {
     "nearby": "nearYou",
     "new": "freshFaces",
@@ -127,118 +121,10 @@ const handleCategoryPagination = async (req, res, category, page, limit) => {
 
   const backendSection = categoryMap[category] || category;
 
-  // ✅ Use new loadMoreSection from loadMoreSection.js
   const { loadMoreSection: newLoadMoreSection } = await import("./loadMoreSection.js");
   
-  // Mock req.body for the new controller
   req.body = { section: backendSection, page: parseInt(page), limit: parseInt(limit) };
   return newLoadMoreSection(req, res);
-};
-
-// ✅ NEW: Load More Section (150/page pagination)
-export const loadMoreSection = async (req, res) => {
-  try {
-    const { section, page = 1 } = req.body;
-    const currentUserId = req.user.userId;
-    const LIMIT = 150;
-
-    console.log(`\n========================================`);
-    console.log(`[Explore] 📄 LOAD MORE: section=${section}, page=${page}`);
-    console.log(`[Explore] User: ${currentUserId}`);
-    console.log(`========================================`);
-
-    if (!section) {
-      console.error(`❌ [LoadMore] Section parameter missing!`);
-      return res.status(400).json({ message: "Section is required" });
-    }
-
-    const me = await User.findById(currentUserId).select(
-      "location lookingFor dna birthday interests gender likedUsers dislikedUsers matches blockedUsers"
-    ).lean();
-
-    if (!me) return res.status(404).json({ message: "User not found" });
-
-    // Get exclusion history from Redis
-    const historyKey = `explore:history:${currentUserId}:${section}`;
-    const seenIdsSet = await redisClient.sMembers(historyKey);
-    const seenIds = [...seenIdsSet, currentUserId.toString()];
-
-    // Build section-specific query
-    let query = {
-      _id: { $nin: seenIds },
-      "location.country": me.location?.country,
-      dna: { $exists: true, $ne: null }
-    };
-
-    if (me.lookingFor) {
-      query.gender = me.lookingFor;
-    }
-
-    // Section-specific filters
-    if (section === "nearYou" && me.location?.city) {
-      query["location.city"] = me.location.city;
-    } else if (section === "freshFaces") {
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      query.createdAt = { $gte: thirtyDaysAgo };
-    }
-
-    console.log(`[LoadMore] Query:`, JSON.stringify(query));
-    console.log(`[LoadMore] Fetching ${LIMIT} users (skip: ${(page - 1) * LIMIT})...`);
-
-    // Fetch 150 users
-    const users = await User.find(query)
-      .select("name avatar bio location birthday gender interests dna isVerified verification createdAt questionsbycategoriesResults")
-      .limit(LIMIT)
-      .skip((page - 1) * LIMIT)
-      .lean();
-
-    console.log(`✅ [LoadMore] Fetched ${users.length} users from DB`);
-
-
-    // Calculate scores
-    const scoredUsers = users.map(u => ({
-      ...u,
-      matchScore: calculateCompatibility(me, u)
-    }));
-
-    // Apply section-specific sorting/filtering
-    let filteredUsers = scoredUsers;
-    if (section === "compatibilityVibes") {
-      filteredUsers = scoredUsers.filter(u => u.matchScore >= 70 && u.matchScore < 90);
-    } else if (section === "theSoulmates") {
-      filteredUsers = scoredUsers.filter(u => u.matchScore >= 90);
-    }
-
-    // Sort
-    if (section === "freshFaces") {
-      filteredUsers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    } else {
-      filteredUsers.sort((a, b) => b.matchScore - a.matchScore);
-    }
-
-    // Add to history
-    const userIds = filteredUsers.map(u => u._id.toString());
-    if (userIds.length > 0) {
-      await redisClient.sAdd(historyKey, userIds);
-      await redisClient.expire(historyKey, 24 * 60 * 60); // 24h TTL
-    }
-
-    console.log(`✅ [LoadMore] Returning ${filteredUsers.length} users (hasMore: ${users.length === LIMIT})`);
-    console.log(`========================================\n`);
-
-    return res.status(200).json({
-      users: filteredUsers,
-      hasMore: users.length === LIMIT,
-      currentPage: page,
-      section
-    });
-
-  } catch (err) {
-    console.error(`\n❌ [LoadMore] FATAL ERROR:`);
-    console.error(err);
-    console.error(`========================================\n`);
-    res.status(500).json({ message: "Failed to load more users." });
-  }
 };
 
 export const getUserDetails = async (req, res) => {
@@ -246,7 +132,6 @@ export const getUserDetails = async (req, res) => {
     const { userId } = req.params;
     const currentUserId = req.user.userId;
 
-    // ✅ Performance Fix: Try cache first
     const cacheKey = `user_details_${userId}`;
     const cached = await getMatchesCache(currentUserId, cacheKey);
     if (cached) {
@@ -288,13 +173,11 @@ export const getUserDetails = async (req, res) => {
       isLocked: isLocked, 
     };
     
-    // ✅ Performance Fix: Cache the result
     await setMatchesCache(currentUserId, `user_details_${userId}`, result, 300); // 5 minutes
     
     res.status(200).json(result);
   } catch (err) {
     console.error("User Details Error:", err);
-    // ✅ Security Fix: Don't expose error details
     const errorMessage = process.env.NODE_ENV === 'production' 
       ? "Server error. Please try again later." 
       : err.message;
@@ -302,10 +185,9 @@ export const getUserDetails = async (req, res) => {
   }
 };
 
-// ✅ NEW: Explore Refill Endpoint
 export const refillExploreSection = async (req, res) => {
     try {
-        const { section } = req.body; // e.g., "nearby", "fresh_faces", "soulmates", "common", "new", "country"
+        const { section } = req.body; 
         const currentUserId = req.user.userId;
 
         if (!section) {
@@ -320,7 +202,6 @@ export const refillExploreSection = async (req, res) => {
 
         if (!me) return res.status(404).json({ message: "User not found" });
 
-        // Call Worker Logic (Fetch 50 new candidates)
         const newMatches = await findMatchesForSection(me, section, 50);
 
         if (!newMatches || newMatches.length === 0) {
@@ -333,13 +214,11 @@ export const refillExploreSection = async (req, res) => {
             });
         }
 
-        // Fetch Full Details for Frontend
         const candidateIds = newMatches.map(m => m.user);
         const candidates = await User.find({ _id: { $in: candidateIds } })
-            .select("name avatar bio interests location birthday subscription gender createdAt isVerified verification dna")
+            .select("_id name avatar birthday verification.status")
             .lean();
 
-        // Merge scores & Format
         const finalResults = candidates.map(c => {
             const match = newMatches.find(m => m.user.toString() === c._id.toString());
             return {
@@ -348,9 +227,8 @@ export const refillExploreSection = async (req, res) => {
             };
         });
 
-        // Sort based on section logic or score
         if (section === "new" || section === "fresh_faces") {
-             finalResults.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+             finalResults.sort((a, b) => b.matchScore - a.matchScore); // Sorting by date was removed from projection, so fallback to score
         } else {
              finalResults.sort((a, b) => b.matchScore - a.matchScore);
         }

@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import { bullMQConnection } from "../config/redis.js";
 import PaymentLog from "../models/PaymentLog.js";
@@ -18,13 +19,13 @@ const processRevenueCatWebhook = async (job) => {
     environment
   } = event;
 
-  console.log(`[RevenueCat Worker] Processing event ${id} (${type}) for User ${app_user_id}`);
+  logger.info(`[RevenueCat Worker] Processing event ${id} (${type}) for User ${app_user_id}`);
 
   // Idempotency Check
   const existingLog = await PaymentLog.findOne({ eventId: id });
   if (existingLog) {
     if (existingLog.status === "processed") {
-      console.log(`[RevenueCat Worker] Event ${id} already processed. Skipping.`);
+      logger.info(`[RevenueCat Worker] Event ${id} already processed. Skipping.`);
       return;
     }
   } else {
@@ -46,7 +47,7 @@ const processRevenueCatWebhook = async (job) => {
   try {
     const isTestEvent = type === "TEST";
     if (isTestEvent) {
-      console.log(`[RevenueCat Worker] ✅ Test event ${id} received and acknowledged.`);
+      logger.info(`[RevenueCat Worker] ✅ Test event ${id} received and acknowledged.`);
       await PaymentLog.findOneAndUpdate({ eventId: id }, { $set: { status: "processed" } });
       return;
     }
@@ -96,7 +97,6 @@ const processRevenueCatWebhook = async (job) => {
           "subscription.expiresAt": expiresAt,
           "subscription.startedAt": startedAt || user.subscription?.startedAt || new Date(),
           "subscription.isTrial": false,
-          "subscription.trialExpiresAt": null,
         };
         break;
 
@@ -106,7 +106,7 @@ const processRevenueCatWebhook = async (job) => {
           "subscription.status": "active",
           "subscription.expiresAt": expiresAt,
           "subscription.startedAt": startedAt || new Date(),
-          "subscription.isTrial": true,
+          "subscription.isTrial": false,
         };
         break;
 
@@ -131,7 +131,7 @@ const processRevenueCatWebhook = async (job) => {
         break;
 
       default:
-        console.log(`[RevenueCat Worker] Ignoring unhandled event: ${type}`);
+        logger.info(`[RevenueCat Worker] Ignoring unhandled event: ${type}`);
         break;
     }
 
@@ -145,7 +145,7 @@ const processRevenueCatWebhook = async (job) => {
 
     // Mark log as successfully processed
     await PaymentLog.findOneAndUpdate({ eventId: id }, { $set: { status: "processed" } });
-    console.log(`[RevenueCat Worker] Event ${id} completed successfully.`);
+    logger.info(`[RevenueCat Worker] Event ${id} completed successfully.`);
 
   } catch (error) {
     // Record failure in the PaymentLog structure
@@ -167,11 +167,11 @@ const revenueCatWorker = new Worker(
 );
 
 revenueCatWorker.on("completed", (job) => {
-  console.log(`[RevenueCat Worker] Job ${job.id} has completed!`);
+  logger.info(`[RevenueCat Worker] Job ${job.id} has completed!`);
 });
 
 revenueCatWorker.on("failed", (job, err) => {
-  console.error(`[RevenueCat Worker] Job ${job.id} has failed with ${err.message}`);
+  logger.error(`[RevenueCat Worker] Job ${job.id} has failed with ${err.message}`);
 });
 
 export default revenueCatWorker;

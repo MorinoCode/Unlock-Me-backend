@@ -1,41 +1,33 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
-import redisClient from "../config/redis.js"; // ✅ CRITICAL FIX #1: Redis cache for auth
+import redisClient from "../config/redis.js";
 
-// ✅ Debounced lastActiveAt updater — max 1 DB write per user per 5 min
-// Uses an in-memory Map: does NOT need Redis. Completely non-blocking.
 const _lastActiveDebounce = new Map();
-const ACTIVE_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
+const ACTIVE_DEBOUNCE_MS = 5 * 60 * 1000;
+
 function updateLastActive(userId) {
   const now = Date.now();
   const last = _lastActiveDebounce.get(userId) || 0;
-  if (now - last < ACTIVE_DEBOUNCE_MS) return; // already updated recently
+  if (now - last < ACTIVE_DEBOUNCE_MS) return;
   _lastActiveDebounce.set(userId, now);
-  // Fire-and-forget: does NOT block the request
   User.findByIdAndUpdate(userId, { lastActiveAt: new Date() }).catch(() => {});
 }
 
-// ✅ CRITICAL FIX #1 — Cache authenticated user in Redis for 5 min
-// Prevents a DB query on EVERY API request. At 1M users = 90% fewer MongoDB reads.
 const getUserFromCache = async (userId) => {
   try {
     const cached = await redisClient.get(`user:session:${userId}`);
     if (cached) return JSON.parse(cached);
-  } catch {
-    // Redis miss — fall through to DB
+  } catch { 
+    // Ignore cache error 
   }
   return null;
 };
 
 const cacheUser = async (userId, userData) => {
   try {
-    await redisClient.setEx(
-      `user:session:${userId}`,
-      300, // 5 minute TTL
-      JSON.stringify(userData)
-    );
+    await redisClient.setEx(`user:session:${userId}`, 300, JSON.stringify(userData));
   } catch {
-    // Non-blocking — cache failure is acceptable
+    // Ignore cache error
   }
 };
 
@@ -43,13 +35,17 @@ export const invalidateUserCache = async (userId) => {
   try {
     await redisClient.del(`user:session:${userId}`);
   } catch {
-    // Non-blocking
+    // Ignore cache error
   }
 };
 
 export const protect = async (req, res, next) => {
-  const token = req.cookies["unlock-me-token"];
-  const refreshToken = req.cookies["unlock-me-refresh-token"];
+  let token = req.cookies["unlock-me-token"];
+  if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+    token = req.headers.authorization.split(" ")[1];
+  }
+
+  let refreshToken = req.cookies["unlock-me-refresh-token"] || req.headers["x-refresh-token"];
 
   if (!token && !refreshToken) {
     return res.status(401).json({ message: "No token, authorization denied" });
@@ -59,42 +55,24 @@ export const protect = async (req, res, next) => {
     let decoded;
     let user;
 
-    // Try to verify access token first
     if (token) {
       try {
         decoded = jwt.verify(token, process.env.JWT_SECRET);
-        if (decoded.type !== "access") {
-          throw new Error("Invalid token type");
-        }
+        if (decoded.type !== "access") throw new Error("Invalid token type");
       } catch (tokenError) {
-        // If access token expired, try refresh token
         if (tokenError.name === "TokenExpiredError" && refreshToken) {
           try {
-            const refreshSecret =
-              process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+            const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
             const refreshDecoded = jwt.verify(refreshToken, refreshSecret);
-            if (refreshDecoded.type !== "refresh") {
-              throw new Error("Invalid refresh token type");
-            }
+            if (refreshDecoded.type !== "refresh") throw new Error("Invalid refresh token type");
 
-            // Refresh tokens must always hit DB (security: revocation check)
-            const dbUser = await User.findById(refreshDecoded.userId).select(
-              "-password"
-            );
-            if (!dbUser || dbUser.refreshToken !== refreshToken) {
-              throw new Error("Invalid refresh token");
-            }
+            const dbUser = await User.findById(refreshDecoded.userId).select("-password");
+            if (!dbUser || dbUser.refreshToken !== refreshToken) throw new Error("Invalid refresh token");
 
-            // ✅ Generate new access token
             const newAccessToken = jwt.sign(
-              {
-                userId: dbUser._id,
-                role: dbUser.role,
-                username: dbUser.username,
-                type: "access",
-              },
+              { userId: dbUser._id, role: dbUser.role, username: dbUser.username, type: "access" },
               process.env.JWT_SECRET,
-              { expiresIn: "30m" } // ✅ FIX #9: Extended from 15m → 30m for mobile UX
+              { expiresIn: "30m" }
             );
 
             const isProduction = process.env.NODE_ENV === "production";
@@ -103,10 +81,11 @@ export const protect = async (req, res, next) => {
               secure: isProduction,
               sameSite: "lax",
               domain: isProduction ? ".unlock-me.app" : undefined,
-              maxAge: 30 * 60 * 1000, // 30 minutes
+              maxAge: 30 * 60 * 1000,
             });
 
-            // Cache the refreshed user
+            res.set("x-access-token", newAccessToken);
+
             const userObj = dbUser.toObject();
             delete userObj.password;
             delete userObj.refreshToken;
@@ -116,78 +95,47 @@ export const protect = async (req, res, next) => {
             req.user.userId = dbUser._id.toString();
             return next();
           } catch {
-            return res
-              .status(401)
-              .json({ message: "Token expired. Please sign in again." });
+            return res.status(401).json({ message: "Token expired. Please sign in again." });
           }
         } else {
-          throw tokenError;
+          return res.status(401).json({ message: "Invalid token" });
         }
       }
     } else {
-      // No access token, try refresh token
-      const refreshSecret =
-        process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+      const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
       const refreshDecoded = jwt.verify(refreshToken, refreshSecret);
-      if (refreshDecoded.type !== "refresh") {
-        throw new Error("Invalid refresh token type");
-      }
+      if (refreshDecoded.type !== "refresh") return res.status(401).json({ message: "Invalid refresh token type" });
       decoded = refreshDecoded;
     }
 
-    // ✅ CRITICAL FIX #1: Check Redis cache BEFORE hitting MongoDB
+    const platform = req.headers['x-app-platform'];
+    req.isWeb = !platform || platform === 'web';
+
     const cachedUser = await getUserFromCache(decoded.userId);
     if (cachedUser) {
-      // ✅ FIX #4: Trial check in memory only — no DB write in middleware
-      if (
-        cachedUser.subscription?.isTrial &&
-        cachedUser.subscription?.trialExpiresAt &&
-        new Date() > new Date(cachedUser.subscription.trialExpiresAt)
-      ) {
-        // Only update in-memory — trialExpirationWorker handles the DB write
+      if (req.isWeb && (!cachedUser.subscription?.revenueCatId || cachedUser.subscription?.status !== 'active')) {
         cachedUser.subscription.plan = "free";
-        cachedUser.subscription.isTrial = false;
+      } else if (cachedUser.subscription?.status !== "active") {
+        cachedUser.subscription.plan = "free";
       }
       req.user = cachedUser;
       req.user.userId = cachedUser._id.toString();
       return next();
     }
 
-    // Cache miss — fetch from DB and cache result
     user = await User.findById(decoded.userId).select("-password -refreshToken");
 
-    if (!user) {
-      return res.status(401).json({ message: "User not found" });
-    }
+    if (!user) return res.status(401).json({ message: "User not found" });
 
     const userObj = user.toObject();
 
-    // ✅ FIX #4: Trial expiration — read-only check in middleware
-    // The actual DB update is handled by trialExpirationWorker (runs every hour)
-    if (
-      userObj.subscription?.isTrial &&
-      userObj.subscription?.trialExpiresAt &&
-      new Date() > new Date(userObj.subscription.trialExpiresAt)
-    ) {
+    if (req.isWeb && (!userObj.subscription?.revenueCatId || userObj.subscription?.status !== 'active')) {
       userObj.subscription.plan = "free";
-      userObj.subscription.isTrial = false;
-      userObj.subscription.trialExpiresAt = null;
-      userObj.subscription.expiresAt = null;
-      // ✅ Write is now async fire-and-forget — does NOT block the request
-      User.findByIdAndUpdate(userObj._id, {
-        $set: {
-          "subscription.plan": "free",
-          "subscription.isTrial": false,
-          "subscription.trialExpiresAt": null,
-          "subscription.expiresAt": null,
-        },
-      }).catch(() => {}); // non-blocking
+    } else if (userObj.subscription?.status !== "active") {
+      userObj.subscription.plan = "free";
     }
 
-    // Cache user for 5 minutes (skip caching refreshToken field)
     await cacheUser(userObj._id.toString(), userObj);
-
-    // ✅ Track lastActiveAt — fire-and-forget, debounced to max once every 5 min
     updateLastActive(userObj._id.toString());
 
     req.user = userObj;
@@ -199,16 +147,19 @@ export const protect = async (req, res, next) => {
 };
 
 export const optionalProtect = async (req, res, next) => {
-  const token = req.cookies["unlock-me-token"];
+  let token = req.cookies["unlock-me-token"];
+  if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+    token = req.headers.authorization.split(" ")[1];
+  }
+
   if (token) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-      // ✅ FIX: Use cache for optional protect too
+      if (decoded.type !== "access") throw new Error();
       const cached = await getUserFromCache(decoded.userId);
       if (cached) {
         req.user = cached;
-        req.user.userId = cached._id.toString(); // ✅ BUG FIX: Restore missing userId property from cache
+        req.user.userId = cached._id.toString();
       } else {
         const userDoc = await User.findById(decoded.userId).select("-password -refreshToken");
         if (userDoc) {
@@ -219,7 +170,7 @@ export const optionalProtect = async (req, res, next) => {
         }
       }
     } catch {
-      req.user = null; // ✅ FIX: No console.log for expected token errors
+      req.user = null;
     }
   }
   next();

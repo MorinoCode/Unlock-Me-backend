@@ -14,8 +14,8 @@ export const signupUser = async (req, res) => {
       return res.status(400).json({ message: passwordValidation.message });
     }
 
-    email = email.toLowerCase();
-    username = username.toLowerCase();
+    email = email.toLowerCase().trim();
+    username = username?.toLowerCase().trim();
 
     if (username && FORBIDDEN_USERNAMES.includes(username)) {
       return res.status(400).json({ message: "This username is not allowed (Reserved word)." });
@@ -23,9 +23,6 @@ export const signupUser = async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-
-    const trialExpiresAt = new Date();
-    trialExpiresAt.setDate(trialExpiresAt.getDate() + 7);
 
     const newUser = new User({
       name,
@@ -35,11 +32,10 @@ export const signupUser = async (req, res) => {
       gender,
       lookingFor,
       subscription: {
-        plan: "platinum",
-        status: "active",
-        isTrial: true,
-        trialExpiresAt: trialExpiresAt,
-        expiresAt: trialExpiresAt,
+        plan: "free",
+        status: "inactive",
+        isTrial: false,
+        expiresAt: null,
         startedAt: new Date(),
       },
     });
@@ -62,7 +58,7 @@ export const signupUser = async (req, res) => {
     const accessToken = jwt.sign(
       { userId: newUser._id, role: newUser.role, username: newUser.username, type: 'access' },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" } 
+      { expiresIn: "30m" } 
     );
     
     const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
@@ -76,17 +72,21 @@ export const signupUser = async (req, res) => {
       refreshToken: refreshToken 
     });
 
+    const isProduction = process.env.NODE_ENV === "production";
+
     res.cookie("unlock-me-token", accessToken, {
       httpOnly: true,
-      secure: true, 
-      sameSite: "strict", 
-      maxAge: 15 * 60 * 1000, 
+      secure: isProduction,
+      sameSite: "lax",
+      domain: isProduction ? ".unlock-me.app" : undefined,
+      maxAge: 30 * 60 * 1000, 
     });
     
     res.cookie("unlock-me-refresh-token", refreshToken, {
       httpOnly: true,
-      secure: true,
-      sameSite: "strict",
+      secure: isProduction,
+      sameSite: "lax",
+      domain: isProduction ? ".unlock-me.app" : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000, 
     });
 

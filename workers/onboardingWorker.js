@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import User from "../models/User.js";
 import redisClient, { bullMQConnection } from "../config/redis.js";
@@ -6,14 +7,14 @@ import { invalidateMatchesCache } from "../utils/cacheHelper.js";
 
 const workerHandler = async (job) => {
   const { type, userId, data } = job.data;
-  console.log(`[OnboardingWorker] Processing ${type} for user: ${userId}`);
+  logger.info(`[OnboardingWorker] Processing ${type} for user: ${userId}`);
 
   try {
     if (type === "PROCESS_QUIZ_RESULTS") {
       const { updateQuery, categoryNames } = data;
       
       const totalAnswers = Object.values(updateQuery).reduce((acc, cat) => acc + (cat?.length || 0), 0);
-      console.log(`[OnboardingWorker] Saving ${totalAnswers} answers for ${categoryNames.length} categories for user ${userId}`);
+      logger.info(`[OnboardingWorker] Saving ${totalAnswers} answers for ${categoryNames.length} categories for user ${userId}`);
 
       // 1. Update Database
       const updatedUser = await User.findByIdAndUpdate(
@@ -48,7 +49,7 @@ const workerHandler = async (job) => {
       return { success: true, dna: newDNA };
     }
   } catch (error) {
-    console.error(`❌ [OnboardingWorker] Error:`, error);
+    logger.error(`❌ [OnboardingWorker] Error:`, error);
     throw error;
   }
 };
@@ -59,9 +60,9 @@ const onboardingWorker = new Worker("onboarding-queue", workerHandler, {
 });
 
 onboardingWorker.on("failed", (job, err) => {
-  console.error(`🚨 [OnboardingWorker] Job ${job.id} failed: ${err.message}`);
+  logger.error(`🚨 [OnboardingWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("✅ [OnboardingWorker] Worker Started & Listening...");
+logger.info("✅ [OnboardingWorker] Worker Started & Listening...");
 
 export default onboardingWorker;

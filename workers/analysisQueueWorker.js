@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import redisClient, { bullMQConnection } from "../config/redis.js";
 import User from "../models/User.js";
@@ -9,7 +10,7 @@ import { generateFeedForUser } from "./unlockFeedWorker.js";
 
 const workerHandler = async (job) => {
     const { userId } = job.data;
-    console.log(`[AnalysisWorker] ⚙️ Processing job for user: ${userId}`);
+    logger.info(`[AnalysisWorker] ⚙️ Processing job for user: ${userId}`);
     const startTime = Date.now();
 
     try {
@@ -17,20 +18,20 @@ const workerHandler = async (job) => {
         const user = await User.findById(userId).lean();
 
         if (!user) {
-            console.error(`[AnalysisWorker] ❌ Critical Error: User ${userId} not found in DB`);
+            logger.error(`[AnalysisWorker] ❌ Critical Error: User ${userId} not found in DB`);
             throw new Error("User not found");
         }
         
-        console.log(`[AnalysisWorker] 👤 User Info: ${user.name} | Country: ${user.location?.country} | City: ${user.location?.city}`);
-        console.log(`[AnalysisWorker] 🔍 DEBUG USER OBJ:`, JSON.stringify(user, null, 2));
+        logger.info(`[AnalysisWorker] 👤 User Info: ${user.name} | Country: ${user.location?.country} | City: ${user.location?.city}`);
+        logger.debug(`[AnalysisWorker] 🔍 DEBUG USER OBJ:`, JSON.stringify(user, null, 2));
 
         if (!user.location?.country) {
-            console.error(`[AnalysisWorker] ❌ Critical Error: User ${userId} is missing 'location.country'`);
+            logger.error(`[AnalysisWorker] ❌ Critical Error: User ${userId} is missing 'location.country'`);
             throw new Error("User location missing");
         }
 
         // 2. Run Heavy Logic
-        console.log(`[AnalysisWorker] ⚙️ Running parallel workers (Explore + unlock)...`);
+        logger.info(`[AnalysisWorker] ⚙️ Running parallel workers (Explore + unlock)...`);
         
         // Run them continuously but wait for both
         const explorePromise = generateAnalysisData(userId).then(async (res) => {
@@ -57,12 +58,12 @@ const workerHandler = async (job) => {
 
         const [analysisResult, feedResult] = await Promise.all([explorePromise, feedPromise]);
 
-        console.log(`[AnalysisWorker] 📊 Results Summary for ${userId}:`);
-        console.log(`   - Explore Data: ${analysisResult ? "✅ SUCCESS (Object)" : "❌ FAILED (NULL)"}`);
-        console.log(`   - unlock Feed: ${feedResult ? "✅ SUCCESS" : "⚠️ SKIPPED/DISABLED (False)"}`);
+        logger.info(`[AnalysisWorker] 📊 Results Summary for ${userId}:`);
+        logger.info(`   - Explore Data: ${analysisResult ? "✅ SUCCESS (Object)" : "❌ FAILED (NULL)"}`);
+        logger.info(`   - unlock Feed: ${feedResult ? "✅ SUCCESS" : "⚠️ SKIPPED/DISABLED (False)"}`);
 
         const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-        console.log(`✅ [AnalysisWorker] Total execution time: ${duration}s`);
+        logger.info(`✅ [AnalysisWorker] Total execution time: ${duration}s`);
 
         if (analysisResult !== null) {
             // ✅ Success (We prioritize Explore/Analysis Data. Feed is optional but tracked)
@@ -88,7 +89,7 @@ const workerHandler = async (job) => {
         }
 
     } catch (error) {
-        console.error(`❌ [AnalysisWorker] Failed: ${error.message}`);
+        logger.error(`❌ [AnalysisWorker] Failed: ${error.message}`);
         // Publish failure event
         const message = JSON.stringify({ 
             type: 'ANALYSIS_FAILED',
@@ -107,25 +108,25 @@ const analysisWorker = new Worker("analysis-queue", workerHandler, {
 });
 
 analysisWorker.on("completed", (job) => {
-    console.log(`[AnalysisWorker] Job ${job.id} completed!`);
+    logger.info(`[AnalysisWorker] Job ${job.id} completed!`);
 });
 
 analysisWorker.on("failed", (job, err) => {
-    console.error(`[AnalysisWorker] Job ${job.id} failed: ${err.message}`);
+    logger.error(`[AnalysisWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("\n\n************************************************************");
-console.log("*   ✅ [AnalysisWorker] NEW VERSION LOADED! (Step 43)    *");
-console.log("************************************************************\n\n");
-console.log("✅ [AnalysisWorker] Worker Started & Listening...");
+logger.debug("\n\n************************************************************");
+logger.info("*   ✅ [AnalysisWorker] NEW VERSION LOADED! (Step 43)    *");
+logger.debug("************************************************************\n\n");
+logger.info("✅ [AnalysisWorker] Worker Started & Listening...");
 
 // ✅ Crash Protection: Handle unexpected errors without exiting
 process.on("unhandledRejection", (reason, promise) => {
-    console.error("🚨 [AnalysisWorker] Unhandled Rejection at:", promise, "reason:", reason);
+    logger.error("🚨 [AnalysisWorker] Unhandled Rejection at:", promise, "reason:", reason);
 });
 
 process.on("uncaughtException", (err) => {
-    console.error("🚨 [AnalysisWorker] Uncaught Exception:", err);
+    logger.error("🚨 [AnalysisWorker] Uncaught Exception:", err);
 });
 
 export default analysisWorker;

@@ -117,6 +117,11 @@ const setupRedisSubscriber = async () => {
           io.to(event.userId).emit("onboarding_processed", event.payload);
         } else if (event.type === "NEW_CHAT_MESSAGE") {
           io.to(event.receiverId).emit("receive_message", event.message);
+        } else if (event.type === "SUBSCRIPTION_UPDATED") {
+          io.to(event.userId).emit("subscription_updated", {
+            plan: event.plan,
+            status: event.status
+          });
         }
       }
     } catch (err) {
@@ -137,6 +142,7 @@ const allowedOrigins = [
   "https://unlock-me-frontend.vercel.app",
   "https://unlock-me.app",
   "https://www.unlock-me.app",
+  "https://app.unlock-me.app",
   "http://192.168.8.124:5173",
   "https://localhost",
   "http://localhost",
@@ -168,7 +174,7 @@ app.use(
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
         mediaSrc: ["'self'", "https://res.cloudinary.com"],
-        connectSrc: ["'self'", "https://res.cloudinary.com"],
+        connectSrc: ["'self'", "https://res.cloudinary.com", "https://api.unlock-me.app", "wss://api.unlock-me.app"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         objectSrc: ["'none'"],
         upgradeInsecureRequests: [],
@@ -212,6 +218,7 @@ const io = new Server(server, {
       }
     },
     methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-app-platform"],
     credentials: true,
   },
 });

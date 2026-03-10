@@ -138,6 +138,7 @@ export const createGoDate = async (req, res) => {
       dateTime,
       location: { country, city, generalArea, exactAddress },
       paymentType,
+      creatorGender: (user.gender || "other").toLowerCase(),
       preferences: {
         gender: genderPref || "other",
         minAge: minAge || 18,
@@ -172,8 +173,11 @@ export const getAvailableDates = async (req, res) => {
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
     const skip = (page - 1) * limit;
 
-    // ✅ Rank 1 Scale Fix: Redis key is now GLOBAL per geographical coordinate
-    const cacheKey = `go_dates_browse_${userCountry}_${city}_${category}_p${page}_l${limit}`;
+    const userGenderLC = (req.user.gender || "Other").toLowerCase();
+    const userLookingForLC = (req.user.lookingFor || "Other").toLowerCase();
+
+    // ✅ Rank 1 Scale Fix: Redis key is now GLOBAL per geographical coordinate + Demographic Segments
+    const cacheKey = `go_dates_browse_${userCountry}_${city}_${category}_${userGenderLC}_${userLookingForLC}_p${page}_l${limit}`;
 
     const cached = await getMatchesCache("global", cacheKey);
     let dates = [];
@@ -184,10 +188,9 @@ export const getAvailableDates = async (req, res) => {
       const query = {
         status: "open",
         dateTime: { $gt: new Date(Date.now() - EXPIRED_THRESHOLD_MS) },
-        // ✅ Removed { creator: { $ne: userId } } for global caching pool
       };
       
-      // ✅ Bug Fix: Enforce Country boundary
+      // Enforce Geographical boundaries
       query["location.country"] = { $regex: new RegExp(`^${userCountry}$`, "i") };
 
       if (city) {
@@ -195,6 +198,15 @@ export const getAvailableDates = async (req, res) => {
       }
       if (category && category !== "all") {
         query.category = category;
+      }
+
+      // ✅ Bug Fix 1: Date creator must prefer Requestor's Gender (or 'other'/'all')
+      query["preferences.gender"] = { $in: ["other", "all", userGenderLC] };
+
+      // ✅ Bug Fix 2: Date creator's gender must strictly match Requestor's `lookingFor`
+      // We skip the creatorGender query if the Requestor wants "other" or "all"
+      if (userLookingForLC !== "other" && userLookingForLC !== "all") {
+        query.creatorGender = userLookingForLC;
       }
 
       dates = await GoDate.find(query)

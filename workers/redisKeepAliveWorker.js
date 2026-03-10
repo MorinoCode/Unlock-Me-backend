@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import "dotenv/config";
 import cron from "node-cron";
 import redisClient from "../config/redis.js";
@@ -14,14 +15,14 @@ let isRunning = false;
 // Previous: every 6 hours — was completely ineffective against TCP idle drops (ECONNRESET)
 cron.schedule("*/5 * * * *", async () => {
   if (isRunning) {
-    console.log("⏰ Redis Keep-Alive: Already running, skipping...");
+    logger.debug("⏰ Redis Keep-Alive: Already running, skipping...");
     return;
   }
   
   isRunning = true;
   
   try {
-    console.log("🔄 Redis Keep-Alive Job Started...");
+    logger.debug("🔄 Redis Keep-Alive Job Started...");
     
     // Check if Redis is configured
     if (!process.env.REDIS_URL) {
@@ -35,7 +36,7 @@ cron.schedule("*/5 * * * *", async () => {
       try {
         await redisClient.connect();
       } catch (connectError) {
-        console.error("❌ Failed to connect to Redis:", connectError.message);
+        logger.error("❌ Failed to connect to Redis:", connectError.message);
         return;
       }
     }
@@ -53,10 +54,10 @@ cron.schedule("*/5 * * * *", async () => {
     // Set TTL to 7 days
     await redisClient.expire(keepAliveKey, 7 * 24 * 60 * 60);
     
-    console.log(`✅ Redis Keep-Alive Completed: ${value}`);
+    logger.info(`✅ Redis Keep-Alive Completed: ${value}`);
     
   } catch (error) {
-    console.error("❌ Redis Keep-Alive Error:", error.message);
+    logger.error("❌ Redis Keep-Alive Error:", error.message);
   } finally {
     isRunning = false;
   }
@@ -66,17 +67,17 @@ cron.schedule("*/5 * * * *", async () => {
 setTimeout(async () => {
   if (process.env.REDIS_URL) {
     try {
-      console.log("🔄 Running initial Redis Keep-Alive...");
+      logger.info("🔄 Running initial Redis Keep-Alive...");
       const timestamp = new Date().toISOString();
       const keepAliveKey = 'unlock-me:keep-alive';
       
       if (redisClient && redisClient.isOpen) {
         await redisClient.set(keepAliveKey, timestamp);
         await redisClient.expire(keepAliveKey, 7 * 24 * 60 * 60);
-        console.log("✅ Initial Redis Keep-Alive completed");
+        logger.info("✅ Initial Redis Keep-Alive completed");
       }
     } catch (error) {
-      console.error("❌ Initial Redis Keep-Alive failed:", error.message);
+      logger.error("❌ Initial Redis Keep-Alive failed:", error.message);
     }
   }
 }, 30000); // 30 seconds delay

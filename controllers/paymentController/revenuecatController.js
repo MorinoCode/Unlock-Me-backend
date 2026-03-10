@@ -33,8 +33,12 @@ export const verifySubscription = async (req, res) => {
       revenueCatId: originalAppUserId || user.subscription.revenueCatId,
       activeEntitlements,
       // If the plan changed, update the startedAt
-      startedAt: user.subscription.plan !== newPlan ? new Date() : user.subscription.startedAt
+      startedAt: user.subscription.plan !== newPlan ? new Date() : user.subscription.startedAt,
+      isTrial: false
     };
+
+    // Clean up trailing obsolete fields since the schema was updated (preventing potential validation or db errors on generic update checks in mongoose)
+    user.subscription.trialExpiresAt = undefined;
 
     await user.save();
 

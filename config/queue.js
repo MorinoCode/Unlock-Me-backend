@@ -22,11 +22,11 @@ const messageQueue = new Queue("message-queue", { connection: bullMQConnection, 
 const soulmateProducerQueue = new Queue("soulmate-producer-queue", { connection: bullMQConnection, defaultJobOptions });
 const soulmateConsumerQueue = new Queue("soulmate-consumer-queue", { connection: bullMQConnection, defaultJobOptions });
 const arrayCleanupQueue = new Queue("array-cleanup-queue", { connection: bullMQConnection, defaultJobOptions });
-const trialExpirationQueue = new Queue("trial-expiration-queue", { connection: bullMQConnection, defaultJobOptions });
+
 console.log("✅ [Queue] Analysis, Explore, GoDate, unlock, Notification, Media, Onboarding, Message & Worker Queues Initialized");
 
 export { 
   analysisQueue, exploreQueue, godateQueue, unlockActionQueue, 
   notificationQueue, mediaQueue, onboardingQueue, messageQueue,
-  soulmateProducerQueue, soulmateConsumerQueue, arrayCleanupQueue, trialExpirationQueue
+  soulmateProducerQueue, soulmateConsumerQueue, arrayCleanupQueue
 };

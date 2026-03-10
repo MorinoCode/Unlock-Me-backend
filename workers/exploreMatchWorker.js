@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import User from "../models/User.js";
 import { setPotentialMatchesPool, batchSetCompatibilityScores } from "../utils/redisMatchHelper.js";
 import { calculateCompatibility } from "../utils/matchUtils.js";
@@ -12,24 +13,24 @@ const STORE_LIMIT = 200; // Store top 200 matches
 // ✅ NEW: On-Demand Analysis Data Generator (150 fetch, 5 sections)
 export async function generateAnalysisData(userId) {
   try {
-    console.log(`\n========================================`);
-    console.log(`[AnalysisWorker] 🚀 STARTING for user: ${userId}`);
-    console.log(`========================================`);
+    logger.debug(`\n========================================`);
+    logger.info(`[AnalysisWorker] 🚀 STARTING for user: ${userId}`);
+    logger.debug(`========================================`);
     const startTime = Date.now();
 
-    console.log(`[AnalysisWorker] Step 1: Fetching user data...`);
+    logger.info(`[AnalysisWorker] Step 1: Fetching user data...`);
     const currentUser = await User.findById(userId)
       .select("location lookingFor dna birthday interests gender questionsbycategoriesResults likedUsers dislikedUsers matches blockedUsers")
       .lean();
 
     if (!currentUser) {
-      console.error(`❌ [AnalysisWorker] User ${userId} NOT FOUND in database!`);
+      logger.error(`❌ [AnalysisWorker] User ${userId} NOT FOUND in database!`);
       return null;
     }
 
-    console.log(`[AnalysisWorker] User found: ${currentUser._id}`);
-    console.log(`[AnalysisWorker] Location: ${JSON.stringify(currentUser.location)}`);
-    console.log(`[AnalysisWorker] LookingFor: ${currentUser.lookingFor}`);
+    logger.info(`[AnalysisWorker] User found: ${currentUser._id}`);
+    logger.info(`[AnalysisWorker] Location: ${JSON.stringify(currentUser.location)}`);
+    logger.info(`[AnalysisWorker] LookingFor: ${currentUser.lookingFor}`);
 
     let userCountry = currentUser.location?.country;
     if (!userCountry) {
@@ -73,14 +74,14 @@ export async function generateAnalysisData(userId) {
       createdAt: 1
     };
 
-    console.log(`[AnalysisWorker] 🔍 Fetching candidates for all sections...`);
-    console.log(`   - Base Query: Country=${userCountry}, LookingFor=${currentUser.lookingFor || "Any"}`);
+    logger.info(`[AnalysisWorker] 🔍 Fetching candidates for all sections...`);
+    logger.debug(`   - Base Query: Country=${userCountry}, LookingFor=${currentUser.lookingFor || "Any"}`);
 
     // ✅ SEPARATE QUERIES FOR EACH SECTION (No overlap, better distribution)
     
     // 1. Near You - Same City Redis GEO
     let nearYou = [];
-    console.log(`[AnalysisWorker] SECTION 1: Near You (City: ${currentUser.location?.city})...`);
+    logger.info(`[AnalysisWorker] SECTION 1: Near You (City: ${currentUser.location?.city})...`);
     try {
         const countryKey = (userCountry).trim().toLowerCase();
         if (currentUser.location?.coordinates && currentUser.location.coordinates[0] !== 0) {
@@ -95,14 +96,14 @@ export async function generateAnalysisData(userId) {
                 }
             }
         }
-    } catch(e) { console.error("[AnalysisWorker] Redis GEO fail", e.message); }
+    } catch(e) { logger.error("[AnalysisWorker] Redis GEO fail", e.message); }
 
     if (nearYou.length === 0) {
         // Fallback
         const nearYouQuery = { ...baseQuery, "location.city": currentUser.location?.city };
         nearYou = await User.aggregate([{ $match: nearYouQuery }, { $sample: { size: SECTION_SIZE } }, { $project: projection }]);
     }
-    console.log(`   - Found: ${nearYou.length} users near you.`);
+    logger.debug(`   - Found: ${nearYou.length} users near you.`);
 
     // Exclude Near You users from other sections
     const nearYouIds = nearYou.map(u => u._id.toString());
@@ -112,7 +113,7 @@ export async function generateAnalysisData(userId) {
     let freshFaces = [];
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    console.log(`[AnalysisWorker] SECTION 2: Fresh Faces (Since: ${thirtyDaysAgo.toISOString().split('T')[0]})...`);
+    logger.info(`[AnalysisWorker] SECTION 2: Fresh Faces (Since: ${thirtyDaysAgo.toISOString().split('T')[0]})...`);
     
     try {
         const countryKey = (userCountry).trim().toLowerCase();
@@ -126,14 +127,14 @@ export async function generateAnalysisData(userId) {
                     .lean();
              }
         }
-    } catch(e) { console.error("[AnalysisWorker] Redis ZSET fail", e.message); }
+    } catch(e) { logger.error("[AnalysisWorker] Redis ZSET fail", e.message); }
 
     if (freshFaces.length === 0) {
         // Fallback
         const freshFacesQuery = { ...baseQuery, _id: { $nin: excludedWithNearYou }, createdAt: { $gte: thirtyDaysAgo } };
         freshFaces = await User.aggregate([{ $match: freshFacesQuery }, { $sort: { createdAt: -1 } }, { $limit: SECTION_SIZE }, { $project: projection }]);
     }
-    console.log(`   - Found: ${freshFaces.length} new users.`);
+    logger.debug(`   - Found: ${freshFaces.length} new users.`);
 
     // Exclude Fresh Faces from remaining sections
     const freshFacesIds = freshFaces.map(u => u._id.toString());
@@ -146,13 +147,13 @@ export async function generateAnalysisData(userId) {
       "location.city": { $ne: currentUser.location?.city }
     };
     
-    console.log(`[AnalysisWorker] SECTION 3: Across the Country (Excluding City: ${currentUser.location?.city})...`);
+    logger.info(`[AnalysisWorker] SECTION 3: Across the Country (Excluding City: ${currentUser.location?.city})...`);
     const acrossTheCountry = await User.aggregate([
       { $match: acrossCountryQuery },
       { $sample: { size: SECTION_SIZE } },
       { $project: projection }
     ]);
-    console.log(`   - Found: ${acrossTheCountry.length} users across the country.`);
+    logger.debug(`   - Found: ${acrossTheCountry.length} users across the country.`);
 
     // Exclude Across Country from Compatibility Vibes
     const acrossCountryIds = acrossTheCountry.map(u => u._id);
@@ -164,15 +165,15 @@ export async function generateAnalysisData(userId) {
       _id: { $nin: excludedWithAcross }
     };
     
-    console.log(`[AnalysisWorker] SECTION 4: Compatibility Vibes (Excluding previous)...`);
+    logger.info(`[AnalysisWorker] SECTION 4: Compatibility Vibes (Excluding previous)...`);
     const compatibilityVibes = await User.aggregate([
       { $match: compatibilityQuery },
       { $sample: { size: SECTION_SIZE } },
       { $project: projection }
     ]);
-    console.log(`   - Found: ${compatibilityVibes.length} random compatibility candidates.`);
+    logger.debug(`   - Found: ${compatibilityVibes.length} random compatibility candidates.`);
 
-    console.log(`[AnalysisWorker] ✅ All sections processed.`);
+    logger.info(`[AnalysisWorker] ✅ All sections processed.`);
 
     // Generate 5 sections (4 with users, 1 null)
     const sections = {
@@ -183,13 +184,13 @@ export async function generateAnalysisData(userId) {
       acrossTheCountry
     };
 
-    console.log(`[AnalysisWorker] 📦 Storing results in Redis (Key: analysis:sections:${userId})`);
-    console.log(`[AnalysisWorker] Sections generated (4 SEPARATE QUERIES):`);
-    console.log(`  - nearYou: ${sections.nearYou.length} users`);
-    console.log(`  - freshFaces: ${sections.freshFaces.length} users`);
-    console.log(`  - soulmates: null (special box)`);
-    console.log(`  - compatibilityVibes: ${sections.compatibilityVibes.length} users`);
-    console.log(`  - acrossTheCountry: ${sections.acrossTheCountry.length} users`);
+    logger.info(`[AnalysisWorker] 📦 Storing results in Redis (Key: analysis:sections:${userId})`);
+    logger.info(`[AnalysisWorker] Sections generated (4 SEPARATE QUERIES):`);
+    logger.debug(`  - nearYou: ${sections.nearYou.length} users`);
+    logger.debug(`  - freshFaces: ${sections.freshFaces.length} users`);
+    logger.debug(`  - soulmates: null (special box)`);
+    logger.debug(`  - compatibilityVibes: ${sections.compatibilityVibes.length} users`);
+    logger.debug(`  - acrossTheCountry: ${sections.acrossTheCountry.length} users`);
 
     // Store in Redis (3-min TTL)
     const cacheKey = `analysis:sections:${userId}`;
@@ -200,16 +201,16 @@ export async function generateAnalysisData(userId) {
     );
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`✅ [AnalysisWorker] SUCCESS! Data generated for ${userId} in ${duration}s`);
-    console.log(`✅ [AnalysisWorker] Redis key: ${cacheKey} (TTL: 180s)`);
-    console.log(`========================================\n`);
+    logger.info(`✅ [AnalysisWorker] SUCCESS! Data generated for ${userId} in ${duration}s`);
+    logger.info(`✅ [AnalysisWorker] Redis key: ${cacheKey} (TTL: 180s)`);
+    logger.debug(`========================================\n`);
 
     return sections;
 
   } catch (error) {
-    console.error(`\n❌ [AnalysisWorker] FATAL ERROR for ${userId}:`);
-    console.error(error);
-    console.error(`========================================\n`);
+    logger.error(`\n❌ [AnalysisWorker] FATAL ERROR for ${userId}:`);
+    logger.error(error);
+    logger.error(`========================================\n`);
     return null; // Return null instead of throwing so calling worker can handle it gracefully
   }
 }
@@ -312,10 +313,10 @@ export async function findMatchesForUser(currentUser) {
         await batchSetCompatibilityScores(currentUser._id, scoresBatch);
         await setPotentialMatchesPool(currentUser._id, topMatches);
     } catch (redisErr) {
-        console.error(`❌ Redis Sync Error for ${currentUser._id}:`, redisErr.message);
+        logger.error(`❌ Redis Sync Error for ${currentUser._id}:`, redisErr.message);
     }
   } catch (error) {
-    console.error(`❌ Error finding matches for user ${currentUser._id}:`, error.message);
+    logger.error(`❌ Error finding matches for user ${currentUser._id}:`, error.message);
     await User.updateOne({ _id: currentUser._id }, { lastMatchCalculation: new Date() }).catch(() => {});
     throw error;
   }
@@ -324,7 +325,7 @@ export async function findMatchesForUser(currentUser) {
 // ✅ NEW: Section-Specific Refill Logic
 export async function findMatchesForSection(currentUser, section, limit = 50) {
     try {
-        console.log(`[MatchWorker] Finding ${limit} matches for section '${section}' (User: ${currentUser._id})`);
+        logger.info(`[MatchWorker] Finding ${limit} matches for section '${section}' (User: ${currentUser._id})`);
         
         const excludedIds = [
             currentUser._id,
@@ -453,7 +454,7 @@ export async function findMatchesForSection(currentUser, section, limit = 50) {
         return finalMatches;
 
     } catch (err) {
-        console.error(`[MatchWorker] Find Section Error:`, err);
+        logger.error(`[MatchWorker] Find Section Error:`, err);
         return [];
     }
 }

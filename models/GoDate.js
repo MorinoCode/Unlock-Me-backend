@@ -6,6 +6,11 @@ const goDateSchema = new mongoose.Schema({
     ref: "User",
     required: true,
   },
+  creatorGender: {
+    type: String,
+    enum: ["male", "female", "other"],
+    default: "other",
+  },
   category: {
     type: String,
     enum: ["coffee", "food", "drink", "movie", "activity", "other"],

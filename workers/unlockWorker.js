@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import User from "../models/User.js";
 import { 
@@ -10,7 +11,7 @@ import { bullMQConnection } from "../config/redis.js";
 
 const unlockWorkerHandler = async (job) => {
     const { userId, targetUserId, action, isMatch } = job.data;
-    console.log(`[unlockWorker] ⚙️ Processing ${action} from ${userId} to ${targetUserId}`);
+    logger.info(`[unlockWorker] ⚙️ Processing ${action} from ${userId} to ${targetUserId}`);
 
     try {
         const now = new Date();
@@ -19,7 +20,7 @@ const unlockWorkerHandler = async (job) => {
         let updateQuery = {};
         if (action === "left") {
             // ✅ Phase 4: Dislikes are Redis-only. We don't write them to MongoDB.
-            console.log(`[unlockWorker] 🏎️ Skipping MongoDB write for Dislike from ${userId}`);
+            logger.info(`[unlockWorker] 🏎️ Skipping MongoDB write for Dislike from ${userId}`);
             // Still update usage/lastunlockDate below though
         } else {
             const updateField = action === "right" ? "likedUsers" : "superLikedUsers";
@@ -63,13 +64,13 @@ const unlockWorkerHandler = async (job) => {
             invalidateExploreCache(userId),
             ...invalidateCurrent,
             ...invalidateTarget,
-        ]).catch((err) => console.error("[unlockWorker] Invalidation error:", err));
+        ]).catch((err) => logger.error("[unlockWorker] Invalidation error:", err));
 
-        console.log(`✅ [unlockWorker] Successfully persisted ${action} for ${userId}`);
+        logger.info(`✅ [unlockWorker] Successfully persisted ${action} for ${userId}`);
         return { success: true };
 
     } catch (error) {
-        console.error(`❌ [unlockWorker] PERSISTENCE FAILED for ${userId}: ${error.message}`);
+        logger.error(`❌ [unlockWorker] PERSISTENCE FAILED for ${userId}: ${error.message}`);
         throw error;
     }
 };
@@ -80,13 +81,13 @@ const unlockWorker = new Worker("unlock-action-queue", unlockWorkerHandler, {
 });
 
 unlockWorker.on("completed", () => {
-    // console.log(`[unlockWorker] Job ${job.id} completed!`);
+    // logger.info(`[unlockWorker] Job ${job.id} completed!`);
 });
 
 unlockWorker.on("failed", (job, err) => {
-    console.error(`[unlockWorker] Job ${job.id} failed: ${err.message}`);
+    logger.error(`[unlockWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("✅ [unlockWorker] Worker Started & Listening...");
+logger.info("✅ [unlockWorker] Worker Started & Listening...");
 
 export default unlockWorker;

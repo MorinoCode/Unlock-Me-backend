@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const seedPath = path.join(__dirname, "../seedQuestions.js");
+const seedPath = path.join(__dirname, "./seedQuestions.js");
 const content = fs.readFileSync(seedPath, "utf8");
 
 // Extract the questions array (between "const questions = [" and "];")

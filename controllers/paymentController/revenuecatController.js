@@ -3,10 +3,9 @@ import { invalidateUserCache, invalidateMatchesCache } from "../../utils/cacheHe
 
 // Optional: Map RevenueCat Product IDs or Entitlements to your internal plan names
 const mapEntitlementToPlan = (entitlements) => {
-  // Replace these strings with your actual RevenueCat Entitlement Identifiers
-  if (entitlements.includes("diamond")) return "diamond";
-  if (entitlements.includes("platinum")) return "platinum";
-  if (entitlements.includes("gold")) return "gold";
+  if (entitlements.includes("diamond_access") || entitlements.some(e => e.includes("diamond"))) return "diamond";
+  if (entitlements.includes("platinum_access") || entitlements.some(e => e.includes("platinum"))) return "platinum";
+  if (entitlements.includes("gold_access") || entitlements.some(e => e.includes("gold"))) return "gold";
   return "free";
 };
 
@@ -142,6 +141,12 @@ export const handleRevenueCatWebhook = async (req, res) => {
       invalidateUserCache(user._id),
       invalidateMatchesCache(user._id, "profile_full")
     ]).catch(err => console.error("Cache invalidation error:", err));
+
+    // Emit socket event to the specific user via direct io reference
+    const io = req.app.get("io");
+    if (io) {
+       io.to(user._id.toString()).emit('subscription_updated', { plan: user.subscription.plan, status: user.subscription.status });
+    }
 
     res.status(200).json({ success: true, message: "Webhook processed" });
 

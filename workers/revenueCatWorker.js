@@ -4,6 +4,7 @@ import { bullMQConnection } from "../config/redis.js";
 import PaymentLog from "../models/PaymentLog.js";
 import User from "../models/User.js";
 import { invalidateMatchesCache, invalidateUserCache } from "../utils/cacheHelper.js";
+import redisClient from "../config/redis.js";
 
 const processRevenueCatWebhook = async (job) => {
   const { event } = job.data;
@@ -69,17 +70,12 @@ const processRevenueCatWebhook = async (job) => {
       user = await User.findOne({ "subscription.revenueCatId": app_user_id });
     }
 
-    if (!user) {
-      console.warn(`[RevenueCat Worker] User ${app_user_id} not found. Skipping.`);
-      await PaymentLog.findOneAndUpdate({ eventId: id }, { $set: { status: "skipped", errorLog: "User not found" } });
-      return;
-    }
-
-    const productLower = (product_id || "").toLowerCase();
+    // Determine the plan mapping
+    const entitlementsStr = (entitlement_ids || []).join(",").toLowerCase();
     let plan = "free";
-    if (productLower.includes("diamond")) plan = "diamond";
-    else if (productLower.includes("platinum")) plan = "platinum";
-    else if (productLower.includes("gold")) plan = "gold";
+    if (entitlementsStr.includes("diamond_access") || entitlementsStr.includes("diamond")) plan = "diamond";
+    else if (entitlementsStr.includes("platinum_access") || entitlementsStr.includes("platinum")) plan = "platinum";
+    else if (entitlementsStr.includes("gold_access") || entitlementsStr.includes("gold")) plan = "gold";
 
     const expiresAt = expiration_at_ms ? new Date(Number(expiration_at_ms)) : null;
     const startedAt = purchased_at_ms ? new Date(Number(purchased_at_ms)) : null;
@@ -91,21 +87,12 @@ const processRevenueCatWebhook = async (job) => {
       case "RENEWAL":
       case "PRODUCT_CHANGE":
       case "NON_RENEWING_PURCHASE":
-        update = {
-          "subscription.plan": plan,
-          "subscription.status": "active",
-          "subscription.expiresAt": expiresAt,
-          "subscription.startedAt": startedAt || user.subscription?.startedAt || new Date(),
-          "subscription.isTrial": false,
-        };
-        break;
-
       case "TRIAL_STARTED":
         update = {
           "subscription.plan": plan,
           "subscription.status": "active",
           "subscription.expiresAt": expiresAt,
-          "subscription.startedAt": startedAt || new Date(),
+          "subscription.startedAt": startedAt || user.subscription?.startedAt || new Date(),
           "subscription.isTrial": false,
         };
         break;
@@ -136,16 +123,25 @@ const processRevenueCatWebhook = async (job) => {
     }
 
     if (Object.keys(update).length > 0) {
-      await User.findByIdAndUpdate(app_user_id, { $set: update });
+      await User.findByIdAndUpdate(user._id, { $set: update });
+      
+      // Clear Caches
       await Promise.all([
-        invalidateMatchesCache(app_user_id, "profile").catch(() => {}),
-        invalidateUserCache(app_user_id).catch(() => {})
+        invalidateMatchesCache(user._id, "profile").catch(() => {}),
+        invalidateUserCache(user._id).catch(() => {})
       ]);
-    }
 
-    // Mark log as successfully processed
-    await PaymentLog.findOneAndUpdate({ eventId: id }, { $set: { status: "processed" } });
-    logger.info(`[RevenueCat Worker] Event ${id} completed successfully.`);
+      // Emit Sub/Pub notification for Sockets
+      await redisClient.publish(
+        "job-events",
+        JSON.stringify({
+           type: "SUBSCRIPTION_UPDATED",
+           userId: user._id.toString(),
+           plan: update["subscription.plan"] || user.subscription?.plan || "free",
+           status: update["subscription.status"] || user.subscription?.status || "expired"
+        })
+      );
+    }
 
   } catch (error) {
     // Record failure in the PaymentLog structure

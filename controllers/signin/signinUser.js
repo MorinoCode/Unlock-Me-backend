@@ -9,16 +9,19 @@ export const signinUser = async (req, res) => {
     email = email.toLowerCase().trim();
 
     const user = await User.findOne({ email }).select("+password");
-    if (!user) return res.status(400).json({ message: "Invalid credentials" });
-    if (!user.password) return res.status(400).json({ message: "Invalid credentials" });
+    if (!user || !user.password) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
 
     const accessToken = jwt.sign(
       { userId: user._id, role: user.role, location: user.location, username: user.username, type: 'access' },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" } 
+      { expiresIn: "30m" } 
     );
     
     const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
@@ -30,17 +33,21 @@ export const signinUser = async (req, res) => {
     
     await User.findByIdAndUpdate(user._id, { refreshToken });
 
+    const isProduction = process.env.NODE_ENV === "production";
+
     res.cookie("unlock-me-token", accessToken, {
       httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-      maxAge: 15 * 60 * 1000, 
+      secure: isProduction,
+      sameSite: "lax",
+      domain: isProduction ? ".unlock-me.app" : undefined,
+      maxAge: 30 * 60 * 1000, 
     });
     
     res.cookie("unlock-me-refresh-token", refreshToken, {
       httpOnly: true,
-      secure: true,
-      sameSite: "strict",
+      secure: isProduction,
+      sameSite: "lax",
+      domain: isProduction ? ".unlock-me.app" : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000, 
     });
 

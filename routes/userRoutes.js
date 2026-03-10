@@ -14,7 +14,9 @@ import {
   updateProfileInfo,
   getMatchesDashboard,
   exportUserData,
-  requestAccountDeletion
+  requestAccountDeletion,
+  updateFCMToken,
+  removeFCMToken
 } from "../controllers/userController/userController.js";
 import { blockUser, unblockUser, getBlockedUsers } from "../controllers/blockController/blockController.js";
 import { authLimiter } from "../middleware/authLimiter.js";
@@ -60,6 +62,9 @@ router.put("/profile/categories", protect, updateCategoryAnswers);
 router.delete("/profile/delete-account", protect, deleteAccount); 
 router.get("/profile/export-data", protect, exportUserData); // ✅ GDPR Right to Portability
 router.get("/matches/matches-dashbord", protect, getMatchesDashboard); 
+
+router.post("/fcm-token", protect, updateFCMToken);
+router.delete("/fcm-token", protect, removeFCMToken);
 
 // ✅ Block User Feature
 router.post("/block/:targetUserId", protect, blockUser);

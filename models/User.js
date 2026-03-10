@@ -25,6 +25,7 @@ const userSchema = new mongoose.Schema(
     },
     password: { type: String, required: true, select: false },
     refreshToken: { type: String, select: false },
+    fcmTokens: { type: [String], default: [] },
 
     gender: {
       type: String,
@@ -74,14 +75,13 @@ const userSchema = new mongoose.Schema(
       expiresAt: { type: Date, default: null },
       status: {
         type: String,
-        enum: ["active", "expired", "canceled"],
-        default: "active",
+        enum: ["active", "expired", "canceled", "inactive"],
+        default: "inactive",
       },
       revenueCatId: { type: String, default: null },
       platform: { type: String, enum: ["ios", "android", "stripe", null], default: null },
       activeEntitlements: { type: [String], default: [] },
       isTrial: { type: Boolean, default: false },
-      trialExpiresAt: { type: Date, default: null },
       startedAt: { type: Date, default: Date.now },
     },
 

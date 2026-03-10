@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import User from "../models/User.js";
 import { bullMQConnection } from "../config/redis.js";
@@ -23,7 +24,7 @@ const arrayCleanupProcessor = async (job) => {
       cleaned++;
       await job.updateProgress(Math.floor(((i + 1) / users.length) * 100));
     } catch (error) {
-      console.error(error);
+      logger.error(error);
     }
   }
   

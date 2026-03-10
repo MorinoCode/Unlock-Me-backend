@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import User from "../models/User.js";
 import redisClient, { bullMQConnection } from "../config/redis.js";
@@ -9,7 +10,7 @@ import { calculateCompatibility } from "../utils/matchUtils.js";
 // Core Logic: Generate Feed (Same as before but optimized)
 export async function generateFeedForUser(currentUser) {
   try {
-      console.log(`[unlockFeedWorker] 🔄 Generating feed for ${currentUser._id}...`);
+      logger.info(`[unlockFeedWorker] 🔄 Generating feed for ${currentUser._id}...`);
       
       const excludedIds = [
           currentUser._id,
@@ -48,14 +49,14 @@ export async function generateFeedForUser(currentUser) {
           });
           await pipeline.exec();
           
-          console.log(`[unlockFeedWorker] ✅ Added ${feed.length} users to ZSET feed for ${currentUser._id}`);
+          logger.info(`[unlockFeedWorker] ✅ Added ${feed.length} users to ZSET feed for ${currentUser._id}`);
           return true;
       } else {
-          console.log(`[unlockFeedWorker] ⚠️ No new users found for ${currentUser._id}`);
+          logger.info(`[unlockFeedWorker] ⚠️ No new users found for ${currentUser._id}`);
           return false;
       }
   } catch (error) {
-      console.error(`[unlockFeedWorker] ❌ Error generating feed:`, error);
+      logger.error(`[unlockFeedWorker] ❌ Error generating feed:`, error);
       throw error; // Throw to let BullMQ know it failed
   }
 }
@@ -63,7 +64,7 @@ export async function generateFeedForUser(currentUser) {
 // BullMQ Worker Processor
 const unlockFeedProcessor = async (job) => {
     const { userId } = job.data;
-    console.log(`[unlockFeedWorker] ⚙️ Processing feed generation for ${userId}`);
+    logger.info(`[unlockFeedWorker] ⚙️ Processing feed generation for ${userId}`);
     
     // Fetch user details needed for feed generation and scoring
     const user = await User.findById(userId).select(
@@ -75,7 +76,7 @@ const unlockFeedProcessor = async (job) => {
     }
 
     await generateFeedForUser(user);
-    console.log(`[unlockFeedWorker] ✅ Job ${job.id} completed`);
+    logger.info(`[unlockFeedWorker] ✅ Job ${job.id} completed`);
 };
 
 const unlockFeedWorker = new Worker("unlock-feed", unlockFeedProcessor, {
@@ -91,10 +92,10 @@ unlockFeedWorker.on("completed", () => {
 });
 
 unlockFeedWorker.on("failed", (job, err) => {
-    console.error(`[unlockFeedWorker] Job ${job.id} failed: ${err.message}`);
+    logger.error(`[unlockFeedWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("✅ [unlockFeedWorker] Worker Started & Listening requires 'unlock-feed' queue...");
+logger.info("✅ [unlockFeedWorker] Worker Started & Listening requires 'unlock-feed' queue...");
 
 export default unlockFeedWorker;
 

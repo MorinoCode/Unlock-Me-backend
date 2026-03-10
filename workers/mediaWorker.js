@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import User from "../models/User.js";
 import cloudinary from "../config/cloudinary.js";
@@ -8,7 +9,7 @@ import { dispatchExploreSync } from "../utils/workerDispatcher.js";
 
 const workerHandler = async (job) => {
   const { type, userId, data } = job.data;
-  console.log(`[MediaWorker] Processing ${type} for user: ${userId}`);
+  logger.info(`[MediaWorker] Processing ${type} for user: ${userId}`);
 
   try {
     const user = await User.findById(userId);
@@ -24,14 +25,14 @@ const workerHandler = async (job) => {
         if (publicId) await cloudinary.uploader.destroy(publicId).catch(() => {});
       }
 
-      console.log(`[MediaWorker] Sending avatar to Cloudinary for ${userId}...`);
+      logger.info(`[MediaWorker] Sending avatar to Cloudinary for ${userId}...`);
       const uploadRes = await cloudinary.uploader.upload(avatarBase64, {
         folder: "unlock_me_avatars",
         transformation: [{ width: 500, height: 500, crop: "fill" }],
         format: "jpg", // ✅ Force JPG so AWS Rekognition works (it skips webp)
         moderation: "aws_rek", // ✅ Correct Cloudinary flag for AWS Rekognition
       });
-      console.log(`[MediaWorker] Cloudinary upload success for ${userId}. Moderation length:`, uploadRes.moderation?.length);
+      logger.debug(`[MediaWorker] Cloudinary upload success for ${userId}. Moderation length:`, uploadRes.moderation?.length);
 
       // ✅ Check Moderation Result
       if (uploadRes.moderation && uploadRes.moderation.length > 0) {
@@ -133,9 +134,9 @@ const workerHandler = async (job) => {
     
     // Fallback empty check to prevent Mongo invalid empty updates
     if (Object.keys(updateData).length > 0) {
-        console.log(`[MediaWorker] Saving to MongoDB for ${userId}. Payload fields:`, Object.keys(updateData));
+        logger.debug(`[MediaWorker] Saving to MongoDB for ${userId}. Payload fields:`, Object.keys(updateData));
         await User.findByIdAndUpdate(userId, { $set: updateData }, { new: true }).select("-password");
-        console.log(`[MediaWorker] DB Save complete for ${userId}`);
+        logger.info(`[MediaWorker] DB Save complete for ${userId}`);
     } else {
         console.warn(`[MediaWorker] Empty updateData for ${userId}, skipping DB save.`);
     }
@@ -155,13 +156,13 @@ const workerHandler = async (job) => {
        mediaType: type,
        payload: updateData
     };
-    console.log(`[MediaWorker] Emitting JOB EVENT success for ${userId}:`, payloadInfo);
+    logger.debug(`[MediaWorker] Emitting JOB EVENT success for ${userId}:`, payloadInfo);
     
     await redisClient.publish("job-events", JSON.stringify(payloadInfo));
 
     return { success: true, userId, updatedFields: Object.keys(updateData) };
   } catch (error) {
-    console.error(`❌ [MediaWorker] Error:`, error);
+    logger.error(`❌ [MediaWorker] Error:`, error);
     // Don't throw, let BullMQ mark it as failed safely
     // Throwing here might cause an unhandled Rejection if not properly bound
     return Promise.reject(error);
@@ -174,9 +175,9 @@ const mediaWorker = new Worker("media-queue", workerHandler, {
 });
 
 mediaWorker.on("failed", (job, err) => {
-  console.error(`🚨 [MediaWorker] Job ${job.id} failed: ${err.message}`);
+  logger.error(`🚨 [MediaWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("✅ [MediaWorker] Worker Started & Listening...");
+logger.info("✅ [MediaWorker] Worker Started & Listening...");
 
 export default mediaWorker;

@@ -702,3 +702,47 @@ export const requestAccountDeletion = async (req, res) => {
     res.status(500).json({ message: errorMessage });
   }
 };
+
+export const updateFCMToken = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.userId || req.user.id;
+    const { fcmToken } = req.body;
+
+    if (!fcmToken || typeof fcmToken !== "string") {
+      return res.status(400).json({ message: "Valid FCM token is required" });
+    }
+
+    await User.findByIdAndUpdate(
+      userId,
+      { $addToSet: { fcmTokens: fcmToken } },
+      { new: true }
+    );
+
+    res.status(200).json({ message: "FCM token registered successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const removeFCMToken = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.userId || req.user.id;
+    const { fcmToken } = req.body;
+
+    if (!fcmToken || typeof fcmToken !== "string") {
+      return res.status(400).json({ message: "Valid FCM token is required" });
+    }
+
+    await User.findByIdAndUpdate(
+      userId,
+      { $pull: { fcmTokens: fcmToken } },
+      { new: true }
+    );
+
+    res.status(200).json({ message: "FCM token removed successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+};

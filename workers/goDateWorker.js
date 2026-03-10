@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Worker } from "bullmq";
 import GoDate from "../models/GoDate.js";
 import { bullMQConnection } from "../config/redis.js";
@@ -10,7 +11,7 @@ const EXPIRED_THRESHOLD_MS = 5 * 60 * 1000;
 
 const workerHandler = async (job) => {
     const { type, data } = job.data;
-    console.log(`[GoDateWorker] ⚙️ Processing job: ${type}`);
+    logger.info(`[GoDateWorker] ⚙️ Processing job: ${type}`);
 
     try {
         if (type === "CLEANUP_EXPIRED") {
@@ -40,7 +41,7 @@ const workerHandler = async (job) => {
         
         return { success: true };
     } catch (error) {
-        console.error(`❌ [GoDateWorker] Failed: ${error.message}`);
+        logger.error(`❌ [GoDateWorker] Failed: ${error.message}`);
         throw error;
     }
 };
@@ -52,22 +53,22 @@ const goDateWorker = new Worker("godate-queue", workerHandler, {
 });
 
 goDateWorker.on("completed", (job) => {
-    console.log(`[GoDateWorker] Job ${job.id} completed!`);
+    logger.info(`[GoDateWorker] Job ${job.id} completed!`);
 });
 
 goDateWorker.on("failed", (job, err) => {
-    console.error(`[GoDateWorker] Job ${job.id} failed: ${err.message}`);
+    logger.error(`[GoDateWorker] Job ${job.id} failed: ${err.message}`);
 });
 
-console.log("✅ [GoDateWorker] Worker Started & Listening...");
+logger.info("✅ [GoDateWorker] Worker Started & Listening...");
 
 // ✅ Crash Protection
 process.on("unhandledRejection", (reason, promise) => {
-    console.error("🚨 [GoDateWorker] Unhandled Rejection at:", promise, "reason:", reason);
+    logger.error("🚨 [GoDateWorker] Unhandled Rejection at:", promise, "reason:", reason);
 });
 
 process.on("uncaughtException", (err) => {
-    console.error("🚨 [GoDateWorker] Uncaught Exception:", err);
+    logger.error("🚨 [GoDateWorker] Uncaught Exception:", err);
 });
 
 export default goDateWorker;

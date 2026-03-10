@@ -332,10 +332,16 @@ export const getMessages = async (req, res) => {
       return res.status(400).json({ error: "Invalid chat user" });
     }
 
-    const { page = 1, limit = 50 } = req.query;
-    const pageNum = Math.max(1, parseInt(page));
+    const { limit = 50, before } = req.query;
     const limitNum = Math.min(100, Math.max(1, parseInt(limit))); 
-    const skip = (pageNum - 1) * limitNum;
+    
+    // Check cache first for initial load (when there's no "before" cursor)
+    if (!before) {
+       const cached = await getMatchesCache(myId, `chat_${otherUserId}`);
+       if (cached && Array.isArray(cached) && cached.length > 0) {
+         return res.status(200).json(cached);
+       }
+    }
 
     const myObjId = mongoose.Types.ObjectId.isValid(myId) ? new mongoose.Types.ObjectId(myId) : myId;
     const otherObjId = mongoose.Types.ObjectId.isValid(otherUserId) ? new mongoose.Types.ObjectId(otherUserId) : otherUserId;
@@ -346,14 +352,28 @@ export const getMessages = async (req, res) => {
 
     let messages = [];
     if (conversation) {
-      messages = await Message.find({
+      const query = {
         conversationId: conversation._id,
         isDeleted: false,
-      })
-        .sort({ createdAt: -1 })
+      };
+      
+      // Cursor logic
+      if (before) {
+        query.createdAt = { $lt: new Date(before) };
+      }
+
+      messages = await Message.find(query)
+        .sort({ createdAt: -1 }) // Get latest first
         .limit(limitNum)
-        .skip(skip)
         .lean();
+    }
+    
+    // Reverse array to chronological order for the frontend
+    messages = messages.reverse();
+
+    // Cache the initial page
+    if (!before && messages.length > 0) {
+       await setMatchesCache(myId, `chat_${otherUserId}`, messages, 60); // 1 minute cache
     }
 
     res.status(200).json(messages);

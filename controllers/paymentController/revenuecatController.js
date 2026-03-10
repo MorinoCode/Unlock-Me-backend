@@ -17,7 +17,7 @@ export const verifySubscription = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
     // Mobile app sends exactly what RevenueCat SDK returned for "customerInfo"
-    const { originalAppUserId, activeEntitlements } = req.body; 
+    const { originalAppUserId, activeEntitlements, platform } = req.body; 
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -31,6 +31,7 @@ export const verifySubscription = async (req, res) => {
       status: activeEntitlements.length > 0 ? "active" : "expired",
       revenueCatId: originalAppUserId || user.subscription.revenueCatId,
       activeEntitlements,
+      platform: platform || user.subscription.platform,
       // If the plan changed, update the startedAt
       startedAt: user.subscription.plan !== newPlan ? new Date() : user.subscription.startedAt,
       isTrial: false
@@ -79,17 +80,30 @@ export const handleRevenueCatWebhook = async (req, res) => {
 
     const revenueCatId = event.app_user_id; // This should match our database
     const eventType = event.type; // e.g. INITIAL_PURCHASE, RENEWAL, CANCELLATION, EXPIRATION
+    const aliases = event.aliases || [];
+    const store = event.store;
 
     console.log(`📡 [RevenueCat Webhook] Event: ${eventType} for User: ${revenueCatId}`);
 
     // Assuming we previously set user.subscription.revenueCatId = app_user_id
     // Alternatively, if app_user_id is the user's Mongo ID, query by _id.
-    const user = await User.findOne({ 
+    let user = await User.findOne({ 
       $or: [
         { "subscription.revenueCatId": revenueCatId },
         { _id: revenueCatId } // If your app sends the mongo DB ID as the RevenueCat app_user_id
       ]
     });
+
+    // Identity Merging: If anonymous or missing, try aliases
+    if (!user && aliases.length > 0) {
+      const validMongoIds = aliases.filter(a => /^[0-9a-fA-F]{24}$/.test(a));
+      if (validMongoIds.length > 0) {
+        user = await User.findOne({ _id: { $in: validMongoIds } });
+        if (user) {
+           console.log(`📡 [RevenueCat Webhook] User found via alias merge: ${user._id}`);
+        }
+      }
+    }
 
     if (!user) {
       console.warn(`[RevenueCat] User not found for app_user_id: ${revenueCatId}`);
@@ -102,6 +116,11 @@ export const handleRevenueCatWebhook = async (req, res) => {
     const activeEntitlements = event.entitlement_ids || [];
     const newPlan = mapEntitlementToPlan(activeEntitlements);
 
+    let platform = user.subscription.platform;
+    if (store === "APP_STORE" || store === "MAC_APP_STORE") platform = "ios";
+    else if (store === "PLAY_STORE" || store === "AMAZON") platform = "android";
+    else if (store === "STRIPE") platform = "stripe";
+
     // Apply the changes to the user based on event type
     switch (eventType) {
       case "INITIAL_PURCHASE":
@@ -112,6 +131,11 @@ export const handleRevenueCatWebhook = async (req, res) => {
         user.subscription.plan = newPlan !== "free" ? newPlan : user.subscription.plan;
         user.subscription.expiresAt = event.expiration_at_ms ? new Date(Number(event.expiration_at_ms)) : null;
         user.subscription.activeEntitlements = activeEntitlements;
+        user.subscription.platform = platform;
+        // Merge revenueCatId if it was previously an anonymous ID and this is a real one, OR if we don't have one
+        if (!user.subscription.revenueCatId || (!user.subscription.revenueCatId.startsWith("$RCAnonymousID") && revenueCatId.startsWith("$RCAnonymousID") === false)) {
+            user.subscription.revenueCatId = revenueCatId;
+        }
         break;
 
       case "CANCELLATION":

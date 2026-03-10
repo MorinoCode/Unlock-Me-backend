@@ -17,7 +17,8 @@ const processRevenueCatWebhook = async (job) => {
     purchased_at_ms, 
     entitlement_ids,
     store,
-    environment
+    environment,
+    aliases
   } = event;
 
   logger.info(`[RevenueCat Worker] Processing event ${id} (${type}) for User ${app_user_id}`);
@@ -70,6 +71,23 @@ const processRevenueCatWebhook = async (job) => {
       user = await User.findOne({ "subscription.revenueCatId": app_user_id });
     }
 
+    // Identity Merging
+    if (!user && aliases && aliases.length > 0) {
+      const validMongoIds = aliases.filter(a => /^[0-9a-fA-F]{24}$/.test(a));
+      if (validMongoIds.length > 0) {
+        user = await User.findOne({ _id: { $in: validMongoIds } });
+        if (user) logger.info(`[RevenueCat Worker] Identity Merged successfully for aliases.`);
+      }
+    }
+
+    if (!user) {
+      // It's possible the user is fully anonymous and hasn't logged in yet. 
+      // Safe to ignore and just mark as processed.
+      logger.warn(`[RevenueCat Worker] User not found for app_user_id: ${app_user_id}. Ignoring.`);
+      await PaymentLog.findOneAndUpdate({ eventId: id }, { $set: { status: "processed", errorLog: "User not found (Anonymous)" } });
+      return;
+    }
+
     // Determine the plan mapping
     const entitlementsStr = (entitlement_ids || []).join(",").toLowerCase();
     let plan = "free";
@@ -79,6 +97,11 @@ const processRevenueCatWebhook = async (job) => {
 
     const expiresAt = expiration_at_ms ? new Date(Number(expiration_at_ms)) : null;
     const startedAt = purchased_at_ms ? new Date(Number(purchased_at_ms)) : null;
+    
+    let platform = user.subscription?.platform || null;
+    if (store === "APP_STORE" || store === "MAC_APP_STORE") platform = "ios";
+    else if (store === "PLAY_STORE" || store === "AMAZON") platform = "android";
+    else if (store === "STRIPE") platform = "stripe";
 
     let update = {};
 
@@ -94,7 +117,12 @@ const processRevenueCatWebhook = async (job) => {
           "subscription.expiresAt": expiresAt,
           "subscription.startedAt": startedAt || user.subscription?.startedAt || new Date(),
           "subscription.isTrial": false,
+          "subscription.platform": platform,
         };
+        // Merge revenueCatId safely
+        if (!user.subscription?.revenueCatId || (!user.subscription.revenueCatId.startsWith("$RCAnonymousID") && app_user_id.startsWith("$RCAnonymousID") === false)) {
+            update["subscription.revenueCatId"] = app_user_id;
+        }
         break;
 
       case "CANCELLATION":

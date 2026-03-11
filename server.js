@@ -67,11 +67,11 @@ const bullMQWorkers = [
   mediaWorker,
   onboardingWorker,
   revenueCatWorker,
-  messageWorker
-].filter(w => w && typeof w.close === "function");
+  messageWorker,
+].filter((w) => w && typeof w.close === "function");
 if (process.env.NODE_ENV !== "test") {
   new Worker(new URL("./workers/exploreWorker.js", import.meta.url), {
-    env: process.env
+    env: process.env,
   });
 }
 connectDB();
@@ -86,32 +86,32 @@ const setupRedisSubscriber = async () => {
         if (event.type === "ANALYSIS_COMPLETE") {
           io.to(event.userId).emit("analysis_complete", {
             ready: true,
-            duration: event.duration
+            duration: event.duration,
           });
         } else if (event.type === "EXPLORE_COMPLETE") {
           io.to(event.userId).emit("explore_complete", {
-            success: true
+            success: true,
           });
         } else if (event.type === "unlock_FEED_COMPLETE") {
           io.to(event.userId).emit("unlock_feed_complete", {
-            success: true
+            success: true,
           });
         } else if (event.type === "ANALYSIS_FAILED") {
           io.to(event.userId).emit("analysis_error", {
-            message: event.error
+            message: event.error,
           });
         } else if (event.type === "NEW_NOTIFICATION") {
           io.to(event.userId).emit("new_notification", event.notification);
         } else if (event.type === "MEDIA_PROCESSED") {
           io.to(event.userId).emit("media_processed", {
             mediaType: event.mediaType,
-            payload: event.payload
+            payload: event.payload,
           });
         } else if (event.type === "MEDIA_REJECTED") {
           io.to(event.userId).emit("media_rejected", {
             mediaType: event.mediaType,
             reason: event.reason,
-            notes: event.notes
+            notes: event.notes,
           });
         } else if (event.type === "ONBOARDING_PROCESSED") {
           io.to(event.userId).emit("onboarding_processed", event.payload);
@@ -120,7 +120,7 @@ const setupRedisSubscriber = async () => {
         } else if (event.type === "SUBSCRIPTION_UPDATED") {
           io.to(event.userId).emit("subscription_updated", {
             plan: event.plan,
-            status: event.status
+            status: event.status,
           });
         }
       }
@@ -146,7 +146,7 @@ const allowedOrigins = [
   "http://192.168.8.124:5173",
   "https://localhost",
   "http://localhost",
-  "capacitor://localhost"
+  "capacitor://localhost",
 ];
 const corsOptions = {
   origin: function (origin, callback) {
@@ -162,7 +162,12 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-app-platform"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "x-app-platform",
+  ],
 };
 app.use(cors(corsOptions));
 app.use(
@@ -174,13 +179,18 @@ app.use(
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
         mediaSrc: ["'self'", "https://res.cloudinary.com"],
-        connectSrc: ["'self'", "https://res.cloudinary.com", "https://api.unlock-me.app", "wss://api.unlock-me.app"],
+        connectSrc: [
+          "'self'",
+          "https://res.cloudinary.com",
+          "https://api.unlock-me.app",
+          "wss://api.unlock-me.app",
+        ],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         objectSrc: ["'none'"],
         upgradeInsecureRequests: [],
       },
     },
-  })
+  }),
 );
 app.use(compression());
 const generalLimiter = rateLimit({
@@ -218,7 +228,12 @@ const io = new Server(server, {
       }
     },
     methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-app-platform"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "x-app-platform",
+    ],
     credentials: true,
   },
 });
@@ -250,18 +265,155 @@ io.use((socket, next) => {
     }
     if (!token) return next(new Error("Authentication error"));
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    socket.userId = decoded._id?.toString() || decoded.userId?.toString() || decoded.id?.toString();
+    socket.userId =
+      decoded._id?.toString() ||
+      decoded.userId?.toString() ||
+      decoded.id?.toString();
     if (!socket.userId) return next(new Error("Authentication error"));
     next();
   } catch {
     return next(new Error("Authentication error"));
   }
-});io.on("connection", (socket) => {
+});
+io.on("connection", (socket) => {
   try {
     if (socket.userId) {
       socket.join(socket.userId);
     }
-    handleSocketConnection(io, socket);    socket.on("error", (err) => {      logger.error({ err: err.message }, "Socket error");    });  } catch (err) {    logger.error({ err }, "Socket connection handler error");  }});app.use("/api/chat", chatRoutes);app.use("/api/users", usersRoutes);app.use("/api/user", userRoutes);app.use("/api/user/onboarding", userOnboardingRoutes);app.use("/api/user/matches", matchesRoutes);app.use("/api/explore", exploreRoutes);app.use("/api/unlock", unlockRoutes);app.use("/api/locations", locationRoutes);app.use("/api/reports", reportRoutes);app.use("/api/posts", postRoutes);app.use("/api/blind-date", blindDateRoutes);app.use("/api/notifications", notificationRoutes);app.use("/api/webhooks", webhookRoutes);app.use("/api/payment", paymentRoutes);app.use("/api/go-date", goDateRoutes);app.use("/api/contact", contactRoutes);app.use("/api/admin", adminRoutes);app.use("/api/seo", seoRoutes);app.get("/ping", (req, res) => {  res.status(200).send("pong \uD83C\uDFD3");});app.get("/health", async (req, res) => {  const health = {    uptime: process.uptime(),    timestamp: Date.now(),    status: "ok",    checks: {      database:        mongoose.connection.readyState === 1 ? "connected" : "disconnected",      redis: redisClient && redisClient.isOpen ? "connected" : "disconnected",      memory: {        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + "MB",        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + "MB",        rss: Math.round(process.memoryUsage().rss / 1024 / 1024) + "MB",      },      nodeVersion: process.version,      environment: process.env.NODE_ENV || "development",    },  };  const statusCode = health.checks.database === "connected" ? 200 : 503;  res.status(statusCode).json(health);});
+    handleSocketConnection(io, socket);
+    socket.on("error", (err) => {
+      logger.error({ err: err.message }, "Socket error");
+    });
+  } catch (err) {
+    logger.error({ err }, "Socket connection handler error");
+  }
+});
+app.use("/api/chat", chatRoutes);
+app.use("/api/users", usersRoutes);
+app.use("/api/user", userRoutes);
+app.use("/api/user/onboarding", userOnboardingRoutes);
+app.use("/api/user/matches", matchesRoutes);
+app.use("/api/explore", exploreRoutes);
+app.use("/api/unlock", unlockRoutes);
+app.use("/api/locations", locationRoutes);
+app.use("/api/reports", reportRoutes);
+app.use("/api/posts", postRoutes);
+app.use("/api/blind-date", blindDateRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/webhooks", webhookRoutes);
+app.use("/api/payment", paymentRoutes);
+app.use("/api/go-date", goDateRoutes);
+app.use("/api/contact", contactRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/seo", seoRoutes);
+app.get("/ping", (req, res) => {
+  res.status(200).send("pong \uD83C\uDFD3");
+});
+app.get("/health", async (req, res) => {
+  const health = {
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+    status: "ok",
+    checks: {
+      database:
+        mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+      redis: redisClient && redisClient.isOpen ? "connected" : "disconnected",
+      memory: {
+        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + "MB",
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + "MB",
+        rss: Math.round(process.memoryUsage().rss / 1024 / 1024) + "MB",
+      },
+      nodeVersion: process.version,
+      environment: process.env.NODE_ENV || "development",
+    },
+  };
+  const statusCode = health.checks.database === "connected" ? 200 : 503;
+  res.status(statusCode).json(health);
+});
 // eslint-disable-next-line no-unused-vars
-app.use((err, req, res, next) => {   if (err.message === "CORS_ERROR") {    return res.status(403).json({      success: false,      message: "CORS Policy Violation: Access Denied.",    });  }  const statusCode = err.statusCode || 500;  let message = "Internal Server Error";  if (process.env.NODE_ENV !== "production") {    message = err.message || "Internal Server Error";  } else {    if (statusCode === 400) {      message = "Invalid request. Please check your input.";    } else if (statusCode === 401) {      message = "Authentication failed.";    } else if (statusCode === 403) {      message = "Access denied.";    } else if (statusCode === 404) {      message = "Resource not found.";    } else {      message = "Server error. Please try again later.";
-    }  }  res.status(statusCode).json({    success: false,    message: message,    ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),  });});process.on("unhandledRejection", (reason, promise) => {  logger.fatal({ reason, promise }, "Unhandled Promise Rejection");  gracefulShutdown("UNHANDLED_REJECTION");});const NON_FATAL_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT"]);process.on("uncaughtException", (error) => {  if (NON_FATAL_CODES.has(error.code)) {    return;  }  logger.fatal({ error }, "Uncaught Exception");  gracefulShutdown("UNCAUGHT_EXCEPTION");});const httpServer = server.listen(PORT, () => {  logger.info(`Server running on port ${PORT}`);});const gracefulShutdown = async (signal) => {  logger.info({ signal }, "Initiating graceful shutdown");  httpServer.close(async () => {    try {      if (bullMQWorkers.length > 0) {        await Promise.all(bullMQWorkers.map(w => w.close()));      }      io.close(() => {      });      if (mongoose.connection.readyState === 1) {        await mongoose.connection.close();      }      if (redisClient && redisClient.isOpen) {        await redisClient.quit();      }      logger.info("Graceful shutdown completed");      process.exit(signal === "UNHANDLED_REJECTION" || signal === "UNCAUGHT_EXCEPTION" ? 1 : 0);    } catch (error) {      logger.error({ error }, "Error during graceful shutdown");      process.exit(1);    }  });  setTimeout(() => {    logger.fatal("Forcing process exit after timeout");    process.exit(1);  }, 10000);};process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+app.use((err, req, res, next) => {
+  if (err.message === "CORS_ERROR") {
+    return res
+      .status(403)
+      .json({
+        success: false,
+        message: "CORS Policy Violation: Access Denied.",
+      });
+  }
+  const statusCode = err.statusCode || 500;
+  let message = "Internal Server Error";
+  if (process.env.NODE_ENV !== "production") {
+    message = err.message || "Internal Server Error";
+  } else {
+    if (statusCode === 400) {
+      message = "Invalid request. Please check your input.";
+    } else if (statusCode === 401) {
+      message = "Authentication failed.";
+    } else if (statusCode === 403) {
+      message = "Access denied.";
+    } else if (statusCode === 404) {
+      message = "Resource not found.";
+    } else {
+      message = "Server error. Please try again later.";
+    }
+  }
+  res
+    .status(statusCode)
+    .json({
+      success: false,
+      message: message,
+      ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),
+    });
+});
+process.on("unhandledRejection", (reason, promise) => {
+  logger.fatal({ reason, promise }, "Unhandled Promise Rejection");
+  gracefulShutdown("UNHANDLED_REJECTION");
+});
+const NON_FATAL_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+]);
+process.on("uncaughtException", (error) => {
+  if (NON_FATAL_CODES.has(error.code)) {
+    return;
+  }
+  logger.fatal({ error }, "Uncaught Exception");
+  gracefulShutdown("UNCAUGHT_EXCEPTION");
+});
+const httpServer = server.listen(PORT, () => {
+  logger.info(`Server running on port ${PORT}`);
+});
+const gracefulShutdown = async (signal) => {
+  logger.info({ signal }, "Initiating graceful shutdown");
+  httpServer.close(async () => {
+    try {
+      if (bullMQWorkers.length > 0) {
+        await Promise.all(bullMQWorkers.map((w) => w.close()));
+      }
+      io.close(() => {});
+      if (mongoose.connection.readyState === 1) {
+        await mongoose.connection.close();
+      }
+      if (redisClient && redisClient.isOpen) {
+        await redisClient.quit();
+      }
+      logger.info("Graceful shutdown completed");
+      process.exit(
+        signal === "UNHANDLED_REJECTION" || signal === "UNCAUGHT_EXCEPTION"
+          ? 1
+          : 0,
+      );
+    } catch (error) {
+      logger.error({ error }, "Error during graceful shutdown");
+      process.exit(1);
+    }
+  });
+  setTimeout(() => {
+    logger.fatal("Forcing process exit after timeout");
+    process.exit(1);
+  }, 10000);
+};
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));

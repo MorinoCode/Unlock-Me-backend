@@ -194,27 +194,40 @@ export const sendMessage = async (req, res) => {
     }
 
     const messageId = new mongoose.Types.ObjectId();
-    const newMessage = {
+    
+    // Save to DB immediately with a placeholder instead of heavy Base64
+    const isBase64 = fileUrl && fileUrl.startsWith("data:");
+    const fileUrlToSave = isBase64 ? "uploading..." : (fileUrl || null);
+
+    const messageDoc = {
       _id: messageId,
       conversationId: conversation._id,
       sender: senderId,
       receiver: receiverId,
       text: cleanText,
-      fileUrl: fileUrl || null,
+      fileUrl: fileUrlToSave,
       fileType: fileType || "text",
       parentMessage: parentMessage || null,
       isRead: false,
       createdAt: new Date(),
     };
 
+    const savedMessage = await Message.create(messageDoc);
+
+    const queuedMessage = {
+      ...messageDoc,
+      fileUrl: fileUrl || null // Ensure worker gets the full data
+    };
+
     await messageQueue.add("process-message", {
-      newMessage,
+      newMessage: queuedMessage,
       senderId,
       receiverId,
       conversationId: conversation._id,
     });
 
-    res.status(201).json(newMessage);
+    // Return response with the original fileUrl so frontend optimistic preview stays intact
+    res.status(201).json({ ...savedMessage.toObject(), fileUrl: fileUrl || null });
   } catch (error) { // eslint-disable-line no-unused-vars
     res.status(500).json({ message: "Server error. Please try again later." });
   }

@@ -78,7 +78,7 @@ export const getMatchesDashboard = async (req, res) => {
       const revealLimit = getMatchListLimit(userPlan, type);
       let revealedIds = [];
 
-      if (revealLimit === Infinity) {
+      if (revealLimit === Infinity || revealLimit === -1) {
         revealedIds = targetIds;
       } else {
         // Check for stickiness cache (24h)
@@ -116,7 +116,7 @@ export const getMatchesDashboard = async (req, res) => {
         const matchScore = calculateCompatibility(user, matchUser);
         const isSuper = mySuperLikedByIdsSet.has(userIdStr);
         
-        const isRevealed = revealedIdsSet.has(userIdStr) || revealLimit === Infinity;
+        const isRevealed = revealedIdsSet.has(userIdStr) || revealLimit === Infinity || revealLimit === -1;
         const isLocked = !isRevealed;
 
         let finalData = { ...matchUser };
@@ -189,7 +189,7 @@ export const getMatchesDashboard = async (req, res) => {
           const matchScore = calculateCompatibility(user, matchUser);
           const isSuper = mySuperLikedByIdsSet.has(id);
           
-          const isRevealed = (typeName === "mutual") || (index < revealLimit);
+          const isRevealed = (typeName === "mutual") || revealLimit === -1 || revealLimit === Infinity || (index < revealLimit);
           const isLocked = !isRevealed;
 
           let finalData = { ...matchUser };

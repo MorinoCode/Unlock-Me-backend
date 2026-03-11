@@ -99,7 +99,7 @@ export const getExploreMatches = async (req, res) => {
       soulmatesMetadata: {
         description: "Soulmates are users with over 90% DNA match",
         isPremiumFeature: true,
-        requiresPlan: ["gold", "platinum"]
+        requiresPlan: ["gold", "platinum", "diamond"]
       },
       cached: false 
     });

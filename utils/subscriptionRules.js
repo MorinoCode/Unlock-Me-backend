@@ -53,7 +53,7 @@ export const getDailyDmLimit = (plan) => {
 
   switch (normalizedPlan) {
     case PLANS.DIAMOND:
-      return Infinity; // ✅ Unlimited Direct Messages
+      return -1; // ✅ Unlimited Direct Messages (using -1 to avoid JSON Infinity bug)
     case PLANS.PLATINUM:
       return 10;
     case PLANS.GOLD:
@@ -71,7 +71,7 @@ export const getunlockLimit = (plan) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
   switch (normalizedPlan) {
     case PLANS.DIAMOND:
-      return Infinity; // ✅ Unlimited unlocks
+      return -1; // ✅ Unlimited unlocks
     case PLANS.PLATINUM:
       return 110;
     case PLANS.GOLD:
@@ -89,7 +89,7 @@ export const getSuperLikeLimit = (plan) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
   switch (normalizedPlan) {
     case PLANS.DIAMOND:
-      return Infinity; // ✅ Unlimited Super Likes
+      return -1; // ✅ Unlimited Super Likes
     case PLANS.PLATINUM:
       return 12;
     case PLANS.GOLD:
@@ -107,7 +107,7 @@ export const getBlindDateConfig = (plan) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
   switch (normalizedPlan) {
     case PLANS.DIAMOND:
-      return { limit: Infinity, cooldownHours: 0 }; // ✅ Unlimited Blind Dates, No Cooldown
+      return { limit: -1, cooldownHours: 0 }; // ✅ Unlimited Blind Dates, No Cooldown
     case PLANS.PLATINUM:
       return { limit: 8, cooldownHours: 1 };
     case PLANS.GOLD:
@@ -163,13 +163,13 @@ export const getMatchListLimit = (plan, type) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
 
   // Mutual matches are always unlimited
-  if (type === "mutual") return Infinity;
+  if (type === "mutual") return -1;
 
   // "Who Liked You" (Incoming Likes)
   if (type === "incoming") {
     switch (normalizedPlan) {
       case PLANS.DIAMOND:
-        return Infinity;
+        return -1;
       case PLANS.PLATINUM:
         return 20;
       case PLANS.GOLD:
@@ -184,7 +184,7 @@ export const getMatchListLimit = (plan, type) => {
   if (type === "superlikes") {
     switch (normalizedPlan) {
       case PLANS.DIAMOND:
-        return Infinity;
+        return -1;
       case PLANS.PLATINUM:
         return 10;
       case PLANS.GOLD:
@@ -199,7 +199,7 @@ export const getMatchListLimit = (plan, type) => {
   if (type === "sent") {
     switch (normalizedPlan) {
       case PLANS.DIAMOND:
-        return Infinity;
+        return -1;
       case PLANS.PLATINUM:
         return 90;
       case PLANS.GOLD:
@@ -255,7 +255,7 @@ export const getGoDateApplyConfig = (plan) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
   switch (normalizedPlan) {
     case PLANS.DIAMOND:
-      return { maxPerDay: Infinity, period: "day" };
+      return { maxPerDay: -1, period: "day" };
     case PLANS.PLATINUM:
       return { maxPerDay: 15, period: "day" };
     case PLANS.GOLD:
@@ -272,7 +272,7 @@ export const getDailyKeyLimit = (plan) => {
   const normalizedPlan = plan?.toLowerCase() || PLANS.FREE;
   switch (normalizedPlan) {
     case PLANS.DIAMOND:
-      return Infinity; // ✅ Unlimited
+      return -1; // ✅ Unlimited (using -1 to avoid JSON serialization bugs)
     case PLANS.PLATINUM:
       return 90;
     case PLANS.GOLD:

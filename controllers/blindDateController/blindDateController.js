@@ -56,7 +56,7 @@ export const getBlindDateStatus = async (req, res) => {
     let nextAvailableTime = null;
 
     // A. Check Daily Limit
-    if (config.limit !== Infinity && countToday >= config.limit) {
+    if (config.limit !== Infinity && config.limit !== -1 && countToday >= config.limit) {
       isAllowed = false;
       reason = "limit_reached";
     }
@@ -81,7 +81,7 @@ export const getBlindDateStatus = async (req, res) => {
       nextAvailableTime,
       plan,
       remainingToday:
-        config.limit === Infinity
+        config.limit === Infinity || config.limit === -1
           ? "Unlimited"
           : Math.max(0, config.limit - countToday),
     };

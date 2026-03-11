@@ -30,7 +30,7 @@ export const getKeyStatus = async (req, res) => {
     }
 
     const limit = getDailyKeyLimit(user.subscription.plan);
-    const remaining = limit === Infinity ? Infinity : Math.max(0, limit - keysUsed);
+    const remaining = limit === -1 ? -1 : Math.max(0, limit - keysUsed);
 
     res.json({
       keysUsed,
@@ -70,7 +70,7 @@ export const unlockProfile = async (req, res) => {
     const limit = getDailyKeyLimit(user.subscription.plan);
     const currentUsage = user.usage.keysUsedToday || 0;
 
-    if (limit !== Infinity && currentUsage >= limit) {
+    if (limit !== -1 && currentUsage >= limit) {
       return res.status(403).json({
         success: false,
         message: "Daily unlock limit reached. Upgrade your plan for more keys.",
@@ -98,7 +98,7 @@ export const unlockProfile = async (req, res) => {
       success: true,
       message: "Key used successfully",
       keysUsed: user.usage.keysUsedToday,
-      remaining: limit === Infinity ? Infinity : limit - user.usage.keysUsedToday,
+      remaining: limit === -1 ? -1 : limit - user.usage.keysUsedToday,
     });
   } catch (error) {
     console.error("UnlockProfile Error:", error);

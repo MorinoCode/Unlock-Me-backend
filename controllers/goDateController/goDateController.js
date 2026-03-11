@@ -307,7 +307,7 @@ export const applyForDate = async (req, res) => {
     // ✅ Apply limit per plan (anti-spam)
     const plan = currentUser.subscription?.plan || "free";
     const applyConfig = getGoDateApplyConfig(plan);
-    if (applyConfig.maxPerDay !== Infinity) {
+    if (applyConfig.maxPerDay !== Infinity && applyConfig.maxPerDay !== -1) {
       const startOfDay = new Date();
       startOfDay.setUTCHours(0, 0, 0, 0);
       const countToday = await GoDateApply.countDocuments({

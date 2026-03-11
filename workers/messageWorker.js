@@ -23,27 +23,39 @@ const messageWorker = new Worker(
       const { newMessage, senderId, receiverId, conversationId } = job.data;
 
       // ✅ 1. Check if fileUrl is Base64 (starts with 'data:')
-      // If it is, upload it to Cloudinary FIRST
+      // If it is, upload it to Cloudinary using secure stream logic
       if (newMessage.fileUrl && newMessage.fileUrl.startsWith("data:")) {
-        logger.info(`[MessageWorker] Uploading Base64 ${newMessage.fileType} to Cloudinary...`);
+        logger.info(`[MessageWorker] Uploading Base64 ${newMessage.fileType} to Cloudinary via stream...`);
         
-        let uploadOptions = {
-          folder: "unlock_me_chat_media",
-          resource_type: newMessage.fileType === "audio" ? "video" : "auto",
-        };
+        const base64Data = newMessage.fileUrl.split('base64,')[1];
+        const audioBuffer = Buffer.from(base64Data, 'base64');
 
-        // If it's audio, force mp3 format for better compatibility
-        if (newMessage.fileType === "audio") {
-          uploadOptions.format = "mp3";
-        }
+        const uploadPromise = new Promise((resolve, reject) => {
+          cloudinary.uploader.upload_stream(
+            {
+              resource_type: newMessage.fileType === "audio" ? "video" : "auto",
+              folder: "unlock_me_chat_media",
+              format: newMessage.fileType === "audio" ? "mp3" : undefined,
+            },
+            (error, result) => error ? reject(error) : resolve(result)
+          ).end(audioBuffer);
+        });
 
-        const uploadRes = await cloudinary.uploader.upload(newMessage.fileUrl, uploadOptions);
+        const uploadRes = await uploadPromise;
         newMessage.fileUrl = uploadRes.secure_url; // Replace Base64 with Cloudinary URL
-        logger.info(`[MessageWorker] Cloudinary upload success: ${newMessage.fileUrl}`);
+        logger.info(`[MessageWorker] Cloudinary stream upload success: ${newMessage.fileUrl}`);
       }
 
-      // 2. Save Message to MongoDB (Now with a real URL if it was Base64)
-      const savedMessage = await Message.create(newMessage);
+      // 2. Update existing Message in MongoDB (Created by controller)
+      const savedMessage = await Message.findByIdAndUpdate(
+        newMessage._id,
+        { $set: { fileUrl: newMessage.fileUrl } },
+        { new: true }
+      );
+      
+      if (!savedMessage) {
+         throw new Error("Message not found in DB - controller failed to create it");
+      }
 
       // 3. Safely Update Conversation Last Message (Atomic)
       let lastMsgText = newMessage.text;

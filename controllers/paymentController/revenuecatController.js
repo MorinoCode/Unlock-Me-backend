@@ -3,9 +3,12 @@ import { invalidateUserCache, invalidateMatchesCache } from "../../utils/cacheHe
 
 // Optional: Map RevenueCat Product IDs or Entitlements to your internal plan names
 const mapEntitlementToPlan = (entitlements) => {
-  if (entitlements.includes("diamond_access") || entitlements.some(e => e.includes("diamond"))) return "diamond";
-  if (entitlements.includes("platinum_access") || entitlements.some(e => e.includes("platinum"))) return "platinum";
-  if (entitlements.includes("gold_access") || entitlements.some(e => e.includes("gold"))) return "gold";
+  if (entitlements.includes("diamond") || entitlements.includes("diamond_access")) return "diamond";
+  if (entitlements.includes("platinum") || entitlements.includes("platinum_access")) return "platinum";
+  if (entitlements.includes("gold") || entitlements.includes("gold_access")) return "gold";
+  if (entitlements.length > 0) {
+    console.error(`Critical Error: Unknown entitlement received [${entitlements.join(', ')}]`);
+  }
   return "free";
 };
 
@@ -16,8 +19,10 @@ const mapEntitlementToPlan = (entitlements) => {
 export const verifySubscription = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
-    // Mobile app sends exactly what RevenueCat SDK returned for "customerInfo"
-    const { originalAppUserId, activeEntitlements, platform } = req.body; 
+    // Mobile app sends customerInfo and explicit platform/expiresAt fields
+    const { originalAppUserId, activeEntitlements, platform, expiresAt, offeringId, productId } = req.body; 
+
+    console.log(`[RC Verify] User ${userId} syncing purchase. Product: ${productId}, Offering: ${offeringId}`);
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -29,9 +34,10 @@ export const verifySubscription = async (req, res) => {
       ...user.subscription,
       plan: newPlan,
       status: activeEntitlements.length > 0 ? "active" : "expired",
-      revenueCatId: originalAppUserId || user.subscription.revenueCatId,
+      revenueCatId: originalAppUserId || user.subscription.revenueCatId || userId,
       activeEntitlements,
-      platform: platform || user.subscription.platform,
+      platform: platform || user.subscription.platform || "unknown",
+      expiresAt: expiresAt ? new Date(expiresAt) : user.subscription.expiresAt,
       // If the plan changed, update the startedAt
       startedAt: user.subscription.plan !== newPlan ? new Date() : user.subscription.startedAt,
       isTrial: false

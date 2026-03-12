@@ -29,7 +29,7 @@ export const getKeyStatus = async (req, res) => {
       remaining,
       plan: user.subscription.plan,
     });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Server Error" });
   }
 };
@@ -82,7 +82,7 @@ export const unlockProfile = async (req, res) => {
       keysUsed: user.usage.keysUsedToday,
       remaining: limit === -1 ? -1 : limit - user.usage.keysUsedToday,
     });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Server Error" });
   }
 };

@@ -17,20 +17,26 @@ const getUserFromCache = async (userId) => {
   try {
     const cached = await redisClient.get(`user:session:${userId}`);
     if (cached) return JSON.parse(cached);
-  } catch {}
+  } catch {
+    // Ignore error
+  }
   return null;
 };
 
 const cacheUser = async (userId, userData) => {
   try {
     await redisClient.setEx(`user:session:${userId}`, 300, JSON.stringify(userData));
-  } catch {}
+  } catch {
+    // Ignore error
+  }
 };
 
 export const invalidateUserCache = async (userId) => {
   try {
     await redisClient.del(`user:session:${userId}`);
-  } catch {}
+  } catch {
+    // Ignore error
+  }
 };
 
 export const protect = async (req, res, next) => {

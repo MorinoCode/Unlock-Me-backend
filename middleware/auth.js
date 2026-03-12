@@ -17,8 +17,8 @@ const getUserFromCache = async (userId) => {
   try {
     const cached = await redisClient.get(`user:session:${userId}`);
     if (cached) return JSON.parse(cached);
-  } catch { 
-    // Ignore cache error 
+  } catch {
+    // Ignore error
   }
   return null;
 };
@@ -27,7 +27,7 @@ const cacheUser = async (userId, userData) => {
   try {
     await redisClient.setEx(`user:session:${userId}`, 300, JSON.stringify(userData));
   } catch {
-    // Ignore cache error
+    // Ignore error
   }
 };
 
@@ -35,7 +35,7 @@ export const invalidateUserCache = async (userId) => {
   try {
     await redisClient.del(`user:session:${userId}`);
   } catch {
-    // Ignore cache error
+    // Ignore error
   }
 };
 
@@ -58,16 +58,16 @@ export const protect = async (req, res, next) => {
     if (token) {
       try {
         decoded = jwt.verify(token, process.env.JWT_SECRET);
-        if (decoded.type !== "access") throw new Error("Invalid token type");
+        if (decoded.type !== "access") throw new Error();
       } catch (tokenError) {
         if (tokenError.name === "TokenExpiredError" && refreshToken) {
           try {
             const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
             const refreshDecoded = jwt.verify(refreshToken, refreshSecret);
-            if (refreshDecoded.type !== "refresh") throw new Error("Invalid refresh token type");
+            if (refreshDecoded.type !== "refresh") throw new Error();
 
             const dbUser = await User.findById(refreshDecoded.userId).select("-password");
-            if (!dbUser || dbUser.refreshToken !== refreshToken) throw new Error("Invalid refresh token");
+            if (!dbUser || dbUser.refreshToken !== refreshToken) throw new Error();
 
             const newAccessToken = jwt.sign(
               { userId: dbUser._id, role: dbUser.role, username: dbUser.username, type: "access" },
@@ -93,6 +93,7 @@ export const protect = async (req, res, next) => {
 
             req.user = userObj;
             req.user.userId = dbUser._id.toString();
+            req.user._id = dbUser._id.toString();
             return next();
           } catch {
             return res.status(401).json({ message: "Token expired. Please sign in again." });
@@ -113,13 +114,14 @@ export const protect = async (req, res, next) => {
 
     const cachedUser = await getUserFromCache(decoded.userId);
     if (cachedUser) {
-      if (req.isWeb && (!cachedUser.subscription?.revenueCatId || cachedUser.subscription?.status !== 'active')) {
+      if (req.isWeb && (!cachedUser.subscription?.revenueCatId || cachedUser.subscription?.status?.toLowerCase() !== 'active')) {
         cachedUser.subscription.plan = "free";
-      } else if (cachedUser.subscription?.status !== "active") {
+      } else if (cachedUser.subscription?.status?.toLowerCase() !== "active") {
         cachedUser.subscription.plan = "free";
       }
       req.user = cachedUser;
       req.user.userId = cachedUser._id.toString();
+      req.user._id = cachedUser._id.toString();
       return next();
     }
 
@@ -129,9 +131,9 @@ export const protect = async (req, res, next) => {
 
     const userObj = user.toObject();
 
-    if (req.isWeb && (!userObj.subscription?.revenueCatId || userObj.subscription?.status !== 'active')) {
+    if (req.isWeb && (!userObj.subscription?.revenueCatId || userObj.subscription?.status?.toLowerCase() !== 'active')) {
       userObj.subscription.plan = "free";
-    } else if (userObj.subscription?.status !== "active") {
+    } else if (userObj.subscription?.status?.toLowerCase() !== "active") {
       userObj.subscription.plan = "free";
     }
 
@@ -140,6 +142,7 @@ export const protect = async (req, res, next) => {
 
     req.user = userObj;
     req.user.userId = userObj._id.toString();
+    req.user._id = userObj._id.toString();
     next();
   } catch {
     return res.status(401).json({ message: "Token is not valid" });
@@ -152,21 +155,36 @@ export const optionalProtect = async (req, res, next) => {
     token = req.headers.authorization.split(" ")[1];
   }
 
+  const platform = req.headers['x-app-platform'];
+  req.isWeb = !platform || platform === 'web';
+
   if (token) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       if (decoded.type !== "access") throw new Error();
       const cached = await getUserFromCache(decoded.userId);
       if (cached) {
+        if (req.isWeb && (!cached.subscription?.revenueCatId || cached.subscription?.status?.toLowerCase() !== 'active')) {
+          cached.subscription.plan = "free";
+        } else if (cached.subscription?.status?.toLowerCase() !== "active") {
+          cached.subscription.plan = "free";
+        }
         req.user = cached;
         req.user.userId = cached._id.toString();
+        req.user._id = cached._id.toString();
       } else {
         const userDoc = await User.findById(decoded.userId).select("-password -refreshToken");
         if (userDoc) {
           const userObj = userDoc.toObject();
+          if (req.isWeb && (!userObj.subscription?.revenueCatId || userObj.subscription?.status?.toLowerCase() !== 'active')) {
+            userObj.subscription.plan = "free";
+          } else if (userObj.subscription?.status?.toLowerCase() !== "active") {
+            userObj.subscription.plan = "free";
+          }
           await cacheUser(decoded.userId, userObj);
           req.user = userObj;
           req.user.userId = userObj._id.toString();
+          req.user._id = userObj._id.toString();
         }
       }
     } catch {

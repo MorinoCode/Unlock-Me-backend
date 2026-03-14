@@ -268,10 +268,14 @@ export const sendStageMessage = async (req, res) => {
         .json({ error: "Message limit reached for this stage" });
     }
 
-    if (session.currentStage === 3 && messageCount >= 10) {
-      return res
-        .status(400)
-        .json({ error: "Message limit reached for this stage" });
+    // ✅ Guideline 1.2 Compliance: Content Filtering
+    const { ContentFilter } = await import("../../utils/ContentFilter.js");
+    const filterResult = ContentFilter.check(text);
+    if (!filterResult.isSafe) {
+      return res.status(400).json({ 
+        error: "Message blocked for safety/compliance",
+        reason: filterResult.reason 
+      });
     }
 
     // ✅ Critical Fix: Initialize messages array if null
@@ -449,5 +453,50 @@ export const handleRevealDecision = async (req, res) => {
     res.status(500).json({ error: errorMessage });
   } finally {
     session.endSession();
+  }
+};
+
+/**
+ * Manually terminate a session for safety/compliance reasons (Block/Report).
+ */
+export const terminateSession = async (req, res) => {
+  try {
+    const { sessionId, reason } = req.body;
+    const userId = req.user._id;
+    const io = req.app.get("io");
+
+    const session = await BlindSession.findById(sessionId);
+    if (!session || session.status === "cancelled" || session.status === "completed") {
+      return res.status(404).json({ error: "Active session not found" });
+    }
+
+    // Security: Only participants can terminate (unless it's an admin, but here we focus on safety UI)
+    const isParticipant = session.participants.some(p => p.toString() === userId.toString());
+    if (!isParticipant) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    session.status = "cancelled";
+    session.cancellationReason = reason || "safety_termination";
+    await session.save();
+
+    // Invalidate caches
+    for (const pId of session.participants) {
+      await invalidateMatchesCache(pId.toString(), "blind_date_active_session").catch(() => {});
+      
+      // Notify partner
+      if (pId.toString() !== userId.toString()) {
+        await emitNotification(io, pId, {
+          type: "BLIND_SESSION_CANCELLED",
+          message: "The blind date session has been terminated for safety.",
+          reason: session.cancellationReason
+        });
+      }
+    }
+
+    res.json({ success: true, message: "Session terminated" });
+  } catch (err) {
+    console.error("Terminate Session Error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 };

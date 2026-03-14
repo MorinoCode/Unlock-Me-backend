@@ -1,7 +1,7 @@
 import GoDate from "../../models/GoDate.js";
 import GoDateApply from "../../models/GoDateApply.js";
 import User from "../../models/User.js";
-import Chat from "../../models/Conversation.js";
+import Conversation from "../../models/Conversation.js";
 import Message from "../../models/Message.js";
 import cloudinary from "../../config/cloudinary.js";
 import {
@@ -216,9 +216,12 @@ export const getAvailableDates = async (req, res) => {
         .limit(limit)
         .lean();
 
-      // Mask Exact Address for global cache
+      // Mask Exact Address & Prune Coordinates for global cache
       dates = dates.map(d => {
-        if (d.location) delete d.location.exactAddress;
+        if (d.location) {
+          delete d.location.exactAddress;
+          delete d.location.coordinates;
+        }
         return d;
       });
 
@@ -261,6 +264,7 @@ export const getMyDates = async (req, res) => {
     };
 
     const dates = await GoDate.find(query)
+      .populate("creator", "name avatar age gender isVerified") // ✅ Fix: Populate creator for partner info
       .populate({
         path: "applicants",
         select: "name avatar age gender bio",
@@ -294,6 +298,12 @@ export const applyForDate = async (req, res) => {
     if (!date || date.status !== "open") {
       await session.abortTransaction();
       return res.status(404).json({ error: "Date not found or closed" });
+    }
+
+    // ✅ Fix: Guard against self-application
+    if (date.creator.toString() === userId.toString()) {
+      await session.abortTransaction();
+      return res.status(400).json({ error: "You cannot apply to your own date." });
     }
 
     // ✅ Critical Fix: Check if already applied atomically
@@ -354,7 +364,7 @@ export const applyForDate = async (req, res) => {
           senderId: userId,
           senderName: currentUser.name,
           senderAvatar: currentUser.avatar || "",
-          message: `${currentUser.name} requested to join '${date.title}'!`,
+          message: `Requested to join '${date.title}'!`,
           targetId: date._id,
         }
       }
@@ -455,12 +465,12 @@ export const acceptDateApplicant = async (req, res) => {
     await date.save({ session });
 
     // ساخت یا آنلاک چت بین سازنده و کاربر پذیرفته‌شده (مثل Blind Date)
-    let chat = await Chat.findOne({
+    let chat = await Conversation.findOne({
       participants: { $all: [userId, applicantId] },
     }).session(session);
 
     if (!chat) {
-      chat = new Chat({
+      chat = new Conversation({
         participants: [userId, applicantId],
         status: "active",
         initiator: userId,
@@ -476,91 +486,125 @@ export const acceptDateApplicant = async (req, res) => {
 
     await session.commitTransaction();
 
-    const creator = await User.findById(userId).select("name avatar");
+    try {
+      const creator = await User.findById(userId).select("name avatar");
 
-    // ✅ ارسال خودکار آدرس و مشخصات دیت در چت برای کاربر پذیرفته‌شده
-    const dateTimeFormatted = date.dateTime
-      ? new Date(date.dateTime).toLocaleString(undefined, {
-          dateStyle: "medium",
-          timeStyle: "short",
-        })
-      : "";
-    const paymentLabel =
-      date.paymentType === "me"
-        ? "I pay"
-        : date.paymentType === "you"
-        ? "You pay"
-        : "Split 50/50";
-    const addressLine =
-      date.location?.exactAddress ||
-      [date.location?.generalArea, date.location?.city]
-        .filter(Boolean)
-        .join(", ") ||
-      "";
-    const detailsLines = [
-      "📍 Date confirmed!",
-      "",
-      `📅 ${date.title || "Date"}`,
-      `🕐 When: ${dateTimeFormatted}`,
-      `📍 Address: ${addressLine}`,
-      `🏙️ Area: ${date.location?.generalArea || ""}, ${
-        date.location?.city || ""
-      }`,
-      `💳 Payment: ${paymentLabel}`,
-    ];
-    if (date.description?.trim()) {
-      detailsLines.push("", `📝 ${date.description.trim()}`);
-    }
-    const detailsText = detailsLines.join("\n");
-
-    const autoMessage = new Message({
-      conversationId: chat._id,
-      sender: userId,
-      receiver: applicantId,
-      text: detailsText,
-      fileType: "text",
-      isRead: false,
-    });
-    await autoMessage.save();
-
-    chat.lastMessage = {
-      text:
-        detailsText.substring(0, 80) + (detailsText.length > 80 ? "..." : ""),
-      sender: userId,
-      createdAt: autoMessage.createdAt,
-    };
-    await chat.save();
-
-    io.to(applicantId.toString()).emit("receive_message", autoMessage);
-
-    await godateQueue.add("notif", {
-      type: "NOTIFICATION",
-      data: {
-        receiverId: applicantId,
-        notificationData: {
-          type: "DATE_ACCEPTED",
-          senderId: userId,
-          senderName: creator.name,
-          senderAvatar: creator.avatar || "",
-          message: `Your date request was accepted! Address & details are in the chat.`,
-          targetId: chat._id,
-        }
+      // ✅ ارسال خودکار آدرس و مشخصات دیت در چت برای کاربر پذیرفته‌شده
+      const dateTimeFormatted = date.dateTime
+        ? new Date(date.dateTime).toLocaleString(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+          })
+        : "";
+      const paymentLabel =
+        date.paymentType === "me"
+          ? "I pay"
+          : date.paymentType === "you"
+          ? "You pay"
+          : "Split 50/50";
+      const addressLine =
+        date.location?.exactAddress ||
+        [date.location?.generalArea, date.location?.city]
+          .filter(Boolean)
+          .join(", ") ||
+        "";
+      const detailsLines = [
+        "📍 Date confirmed!",
+        "",
+        `📅 ${date.title || "Date"}`,
+        `🕐 When: ${dateTimeFormatted}`,
+        `📍 Address: ${addressLine}`,
+        `🏙️ Area: ${date.location?.generalArea || ""}, ${
+          date.location?.city || ""
+        }`,
+        `💳 Payment: ${paymentLabel}`,
+      ];
+      if (date.description?.trim()) {
+        detailsLines.push("", `📝 ${date.description.trim()}`);
       }
-    });
+      const detailsText = detailsLines.join("\n");
 
-    await invalidateGoDateCacheForUsers([userId, applicantId]);
-    await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
-    await invalidateGoDateGlobalCache(date.location?.country, date.location?.city);
-    
-    // ✅ Critical Fix: Invalidate Conversation Cache (Correct Keys)
-    await invalidateMatchesCache(userId, "conversations_active");
-    await invalidateMatchesCache(applicantId, "conversations_active");
-    await invalidateMatchesCache(userId, "unread_count");
-    await invalidateMatchesCache(applicantId, "unread_count");
+      const autoMessage = new Message({
+        conversationId: chat._id,
+        sender: userId,
+        receiver: applicantId,
+        text: detailsText,
+        fileType: "text",
+        isRead: false,
+      });
+      await autoMessage.save();
+
+      // ✅ Inject Safety Instructions (Apple/Google Compliance)
+      const safetyText = `🛡️ SAFETY FIRST: Your well-being is our priority. Please follow these essential guidelines for a safe experience:
+
+• Tell a Friend: Share your date location and expected return time with a trusted friend or family member.
+• Meet in Public: Always ensure your first few meetings are in well-lit, busy public places.
+• Independent Transport: Arrange your own transportation to and from the date. Do not rely on your partner for a ride.
+• Stay Alert: Keep your personal belongings and drinks with you at all times.
+• Trust Your Gut: If you feel uncomfortable or if the location changes unexpectedly, leave immediately.
+• Report Issues: You can use our 'Safety Center' at any time to report suspicious behavior or block a user.
+
+Have a wonderful and safe time!`;
+
+      const safetyMessage = new Message({
+        conversationId: chat._id,
+        sender: userId,
+        receiver: applicantId,
+        text: safetyText,
+        fileType: "system",
+        isRead: false,
+      });
+      await safetyMessage.save();
+
+      const conversationIdStr = chat._id.toString();
+
+      await Conversation.findByIdAndUpdate(conversationIdStr, {
+        $set: {
+          lastMessage: {
+            text: "🛡️ Safety First: Essential Guidelines",
+            sender: userId,
+            createdAt: safetyMessage.createdAt,
+          }
+        }
+      });
+
+      io.to(conversationIdStr).emit("receive_message", autoMessage);
+      io.to(conversationIdStr).emit("receive_message", safetyMessage);
+
+      await godateQueue.add("notif", {
+        type: "NOTIFICATION",
+        data: {
+          receiverId: applicantId,
+          notificationData: {
+            type: "DATE_ACCEPTED",
+            senderId: userId,
+            senderName: creator.name,
+            senderAvatar: creator.avatar || "",
+            message: `Your date request was accepted! Address & details are in the chat.`,
+            targetId: conversationIdStr,
+          }
+        }
+      });
+
+      await invalidateGoDateCacheForUsers([userId, applicantId]);
+      await invalidateMatchesCache("global", `go_date_details_${dateId}`).catch(() => {});
+      await invalidateGoDateGlobalCache(date.location?.country, date.location?.city);
+
+      // ✅ Critical Fix: Invalidate Conversation Cache (Correct Keys)
+      await invalidateMatchesCache(userId, "conversations_active");
+      await invalidateMatchesCache(applicantId, "conversations_active");
+      await invalidateMatchesCache(userId, "unread_count");
+      await invalidateMatchesCache(applicantId, "unread_count");
+
+    } catch (postCommitErr) {
+      console.error("[Accept Date] Post-Commit Sync Error:", postCommitErr);
+    }
 
     res.json({ success: true, chatRuleId: chat._id });
   } catch (err) {
-    await session.abortTransaction();
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     console.error("Accept Error:", err);
     // اگر ارور Validaton بود (مثل gender اشتباه)، جزئیات بده
     if (err.name === "ValidationError") {
@@ -674,8 +718,13 @@ export const getGoDateDetails = async (req, res) => {
       await setMatchesCache("global", cacheKey, dateData, GO_DATE_CACHE_TTL);
     }
 
-    // ✅ Privacy Guard: Clone data and redact address if unauthorized
+    // ✅ Privacy Guard: Remove Coordinates for ALL users & redact address if unauthorized
     const result = { ...dateData };
+
+    if (result.location) {
+      delete result.location.coordinates;
+    }
+
     const isCreator = result.creator?._id?.toString() === userId.toString() || result.creator?.toString() === userId.toString();
     const isAccepted = result.acceptedUser?._id?.toString() === userId.toString() || result.acceptedUser?.toString() === userId.toString();
 

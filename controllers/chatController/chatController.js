@@ -34,6 +34,18 @@ export const sendMessage = async (req, res) => {
     const cleanText = text
       ? sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} })
       : "";
+
+    // ✅ Guideline 1.2 Compliance: Content Filtering (Chat)
+    if (cleanText) {
+      const { ContentFilter } = await import("../../utils/ContentFilter.js");
+      const filterResult = ContentFilter.check(cleanText);
+      if (!filterResult.isSafe) {
+        return res.status(400).json({ 
+          error: "Message blocked for safety/compliance",
+          reason: filterResult.reason 
+        });
+      }
+    }
       
     const sender = await User.findById(senderId).select(
       "usage subscription likedUsers likedBy blockedUsers blockedBy"

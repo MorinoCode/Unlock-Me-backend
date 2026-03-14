@@ -266,6 +266,19 @@ export const handleSocketConnection = (io, socket) => {
     try {
       const session = await BlindSession.findById(sessionId);
       if (!session || session.status !== "active") return;
+
+      // ✅ Guideline 1.2 Compliance: Content Filtering for Socket Messages
+      const { ContentFilter } = await import("../utils/ContentFilter.js");
+      const filterResult = ContentFilter.check(text);
+
+      if (!filterResult.isSafe) {
+        console.warn(`[Safety] Blind Date message blocked for user ${socket.userId}: ${filterResult.reason}`);
+        socket.emit("blind_message_error", { 
+          message: "Your message contains prohibited content and was blocked." 
+        });
+        return;
+      }
+
       session.messages.push({
         sender: socket.userId,
         text,
@@ -283,7 +296,10 @@ export const handleSocketConnection = (io, socket) => {
         "session_update",
         updatedSession,
       );
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.error("send_blind_message error:", err);
+      socket.emit("error", { message: "Internal server error while sending message." });
+    }
   });
   socket.on("submit_reveal_decision", async ({ sessionId, decision }) => {
     const dbSession = await mongoose.startSession();

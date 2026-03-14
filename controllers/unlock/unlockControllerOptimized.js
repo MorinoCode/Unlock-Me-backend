@@ -311,7 +311,7 @@ export const handleunlockAction = async (req, res) => {
             senderId: currentUserId,
             senderName: me.name,
             senderAvatar: me.avatar,
-            message: "You received a Super Unlock! 🌟",
+            message: "Sent you a Super Unlock! 🌟",
             targetId: currentUserId.toString(),
         });
     }

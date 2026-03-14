@@ -8,6 +8,7 @@ import {
   sendStageMessage,
   proceedToNextStage,
   handleRevealDecision,
+  terminateSession,
 } from "../controllers/blindDateController/blindDateController.js";
 
 const router = express.Router();
@@ -22,5 +23,6 @@ router.post("/answer", protect, submitAnswer);
 router.post("/message", protect, sendStageMessage);
 router.post("/proceed", protect, proceedToNextStage);
 router.post("/reveal-decision", protect, handleRevealDecision);
+router.post("/terminate", protect, terminateSession);
 
 export default router;

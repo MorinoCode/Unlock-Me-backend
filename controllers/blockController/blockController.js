@@ -65,6 +65,26 @@ export const blockUser = async (req, res) => {
       console.log("Conversation hide error:", e);
     }
 
+    // 3. ✅ Guideline 1.2: Terminate active Blind Date sessions
+    try {
+      const BlindSession = (await import("../../models/BlindSession.js")).default;
+      const activeSession = await BlindSession.findOne({
+        participants: { $all: [userId, targetUserId] },
+        status: { $nin: ["completed", "cancelled"] }
+      });
+
+      if (activeSession) {
+        activeSession.status = "cancelled";
+        activeSession.cancellationReason = "blocked_by_user";
+        await activeSession.save();
+        
+        // Invalidate caches if possible or let them expire
+        console.log(`[Safety] Terminated Blind Date session ${activeSession._id} due to block.`);
+      }
+    } catch (sessionErr) {
+      console.error("Blind session termination error during block:", sessionErr);
+    }
+
     res.status(200).json({ message: "User blocked successfully" });
   } catch (error) {
     console.error("Block user error:", error);

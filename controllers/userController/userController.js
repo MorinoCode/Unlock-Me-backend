@@ -125,6 +125,18 @@ export const updateProfileInfo = async (req, res) => {
       gender, lookingFor, birthday,
     };
 
+    // ✅ Guideline 1.2 Compliance: Content Filtering (Profile Bio)
+    if (bio) {
+        const { ContentFilter } = await import("../../utils/ContentFilter.js");
+        const filterResult = ContentFilter.check(bio);
+        if (!filterResult.isSafe) {
+          return res.status(400).json({ 
+            error: "Bio text blocked for safety/compliance",
+            reason: filterResult.reason 
+          });
+        }
+    }
+
     // Handle location update - preserve existing coordinates and type if not provided
     if (country !== undefined || city !== undefined || countryCode !== undefined || location) {
       const locationUpdate = {

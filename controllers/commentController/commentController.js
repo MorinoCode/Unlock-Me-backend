@@ -20,6 +20,16 @@ export const addComment = async (req, res) => {
       return res.status(400).json({ message: "Comment content is required" });
     }
 
+    // ✅ Guideline 1.2 Compliance: Content Filtering (Comments)
+    const { ContentFilter } = await import("../../utils/ContentFilter.js");
+    const filterResult = ContentFilter.check(content);
+    if (!filterResult.isSafe) {
+      return res.status(400).json({ 
+        error: "Comment blocked for safety/compliance",
+        reason: filterResult.reason 
+      });
+    }
+
     const post = await Post.findById(postId);
     if (!post) return res.status(404).json({ message: "Post not found" });
 
